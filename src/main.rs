@@ -2,52 +2,54 @@
 #[macro_use] extern crate serde_derive;
 extern crate serde;
 extern crate mio;
+extern crate mio_extras;
 extern crate middleman;
 extern crate clap;
 
-use clap::{App, SubCommand};
+use clap::App;
 use middleman::{
 	Middleman,
 	Message,
 	Threadless,
 };
-use std::collections::{
-	HashSet,
-};
 
 use std::{
-	env,
 	thread,
+	io::{
+		ErrorKind,
+		stdout,
+		Write,
+	},
+	collections::HashMap,
+	net::SocketAddr,
 };
-use mio::*;
-use std::net::SocketAddr;
-use mio::tcp::{
-	TcpListener,
-	TcpStream,
+use mio::{
+	Poll,
+	Ready,
+	PollOpt,
+	Events,
+	Token,
+	Evented,
+	tcp::{
+		TcpListener,
+		TcpStream,
+	},
 };
-use std::io::{
-	Read,
-	Write,
-	ErrorKind,
-};
+use mio_extras::channel::channel;
 
 fn main() {
 	let matches = App::new("Pinggame")
-                        .version("1.0")
-                        .author("C. Esterhuyse <christopher.esterhuyse@gmail.com>")
-                        .about("A super small rust server client toy game for testing network RTT.")
-                        .args_from_usage("-n, --name=[FILE] 'Set the name for a client session'
-                                         <ip> 'Sets the bind/connect addr'")
-                        .get_matches();
+		        .version("1.0")
+		        .author("C. Esterhuyse <christopher.esterhuyse@gmail.com>")
+		        .about("A super small rust server client toy game for testing network RTT.")
+		        .args_from_usage("-n, --name=[FILE] 'Set the name for a client session'
+		                         <ip> 'Sets the bind/connect addr'")
+		        .get_matches();
 
     // You can check the value provided by positional arguments, or option arguments
     if let Some(ip) = matches.value_of("ip") {
         println!("Value for server: {}", ip);
     }
-
-    // if let Some(ip) = matches.value_of("ip") {
-    //     println!("Value for server: {}", ip);
-    // }
 
 	let addr: SocketAddr = matches.value_of("ip").expect("NO IP??").parse().unwrap();
 	println!("ADDR {:?}", &addr);
@@ -58,29 +60,17 @@ fn main() {
     	Some(name) => client(&addr, name.to_owned()),
     	None => server(&addr),
     };
-
-    // match matches.occurrences_of("server") {
-    //     0 => client(&addr).ok(),
-    //     _ => server(&addr).ok(),
-    // };
 }
-
-use std::sync::mpsc::{
-	Receiver,
-	Sender,
-	channel,
-};
 
 fn client(addr: &SocketAddr, name: String) {
 	println!("CLIENT START with name `{}`", &name);
-	// let client_tok = Token(0);
-	// let poll = Poll::new().unwrap();
+
 	let sock = TcpStream::connect(&addr).unwrap();
 	let mut mm = Threadless::new(sock);
-	mm.send(& Serverward::Hello{ name: name });
+	mm.send(& Serverward::Hello{ name: name }).expect("hello failed");
 	match mm.recv::<Clientward>() {
-		Ok(Clientward::Welcome{ position: p}) => {
-			client_play(p, mm)
+		Ok(Clientward::Welcome{ row: r}) => {
+			client_play(r, mm)
 		},
 		x => {
 			println!("CLIENT EXPECTED WELCOME {:?}", &x);
@@ -90,15 +80,21 @@ fn client(addr: &SocketAddr, name: String) {
 	
 }
 
-enum Directions { //TODO
-	Left, Right,
+#[derive(Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
+enum Direction { //TODO
+	Left,
+	Right,
 }
 
-fn client_play<M: Middleman>(pos: usize, mut mm: M) {
-	println!("I have been given pos {:?}", pos);
+fn client_play<M: Middleman>(row: usize, mut mm: M) {
+	println!("I have been given row {:?}", row);
 	let mut game_state = GameState::new();
-	let (mut s, mut r) = channel(); //channel between keylistener thread and main
-	let handle = thread::spawn(move || {
+
+
+    // handle ACCEPTING
+
+	let (s, r) = channel(); //channel between keylistener thread and main
+	let _handle = thread::spawn(move || {
 		let mut buffer = String::new();
 		println!("keylister going at it...");
 		loop {
@@ -107,59 +103,70 @@ fn client_play<M: Middleman>(pos: usize, mut mm: M) {
 	    	std::io::stdin().read_line(&mut buffer).unwrap();
 	    	match buffer.trim() {
 	    		"l" => {
-	    			s.send(true);//left
+	    			s.send(Direction::Left).ok();
 	    		},
 	    		"r" => {
-	    			s.send(false);//right
+	    			s.send(Direction::Right).ok();
 	    		},
 	    		_ => {println!("read `{}`", &buffer);},
 	    	}
 		}
 	});
-	let sleepytime = std::time::Duration::from_millis(200);
-	loop {
-		//sleep
-		thread::sleep(sleepytime);
 
-		while let Ok(dir) = r.try_recv() {
-			//request a move
-			mm.send(& Serverward::MoveMe { left: dir } ).ok();
-		}
+
+
+	let poll = Poll::new().unwrap();
+	poll.register(&r, Token(0), Ready::readable(),
+				PollOpt::edge()).unwrap();
+	let mut events = Events::with_capacity(128);
+	let tick_millis = std::time::Duration::from_millis(300);
+
+	loop {
+   		poll.poll(&mut events, Some(tick_millis)).unwrap();
+    	for _event in events.iter() {
+    		if let Ok(d) = r.try_recv() {
+				//request a move
+				mm.send(& Serverward::MoveMe { dir: d } ).ok();
+				println!("Sending req done");
+			}
+    	}
 
 		match mm.try_recv::<Clientward>() {
 			Ok(msg) => {
-				use Clientward::*;
+				;
 				println!("Got {:?} from server...", msg);
 				match msg {
-					Welcome { position: p } => (), // wtf
-					BadName => (), //wtf
-					MovePiece { pos: p, left: l } => {
-						println!("moving piece in pos {:?} to {}", p, if l {"left"} else {"right"} );
-						game_state.move_piece(p, l);
+					Clientward::Welcome { row: _r } => (), // wtf
+					Clientward::MovePiece { row: r, dir: d } => {
+						println!("moving piece in row {:?} in {:?}", r, d );
+						game_state.move_piece(r, d).expect("move failed");
 						game_state.draw();
 					},
-					AddPlayer { start_h: s, name: n } => {
+					Clientward::AddPlayer { start_h: s, name: n } => {
 						game_state.add_player(s, n);
 						game_state.draw();
 					},
-					RemovePlayer { pos: p } => {
-						game_state.remove_player(pos);
+					Clientward::RemovePlayer { row: r } => {
+						game_state.remove_player(r).expect("couldnt remove");
 						game_state.draw();
 					},
-					GameState { state: g } => {
+					Clientward::GameState { state: g } => {
 						game_state = g;
 						game_state.draw();
 					}, 
+					Clientward::KickingYou { kick_reason: kick_msg } => {
+						println!("Ive been kicked! {:?}", kick_msg);
+						return;
+					} 
 				}
 			},
 			Err(middleman::TryRecvError::ReadNotReady) => (),
 			Err(e) => {
-				println!("Something went wrong");
+				println!("Something went wrong {:?}", e);
 				return;
 			}
 		}
 	}
-	//TODO
 }
 
 
@@ -173,6 +180,20 @@ struct ClientData<M: Middleman> {
 }
 
 
+#[derive(Copy, Clone, Hash, Eq, PartialEq, Debug)]
+struct ClientId(u32);
+
+
+fn next_free_cid<M: Middleman>(client_data: &HashMap<ClientId, ClientData<M>>) -> ClientId {
+	for id in 0.. {
+		let cid = ClientId(id);
+		if !client_data.contains_key(& cid) {
+			return cid
+		}
+	}
+	panic!("Ran out of IDS?");
+}
+
 // spawn an echo server on localhost. return the thread handle and the bound ip addr.
 fn server(addr: &SocketAddr) {
 	let listener = TcpListener::bind(addr).unwrap();
@@ -183,9 +204,10 @@ fn server(addr: &SocketAddr) {
 	let tick_millis = std::time::Duration::from_millis(300);
 
 	let mut game_state = GameState::new();
-	let mut client_data = vec![];
+	let mut client_data = HashMap::new();
 	let mut to_broadcast = vec![];
-	let mut to_kick = HashSet::new();
+	let mut send_to_all_but: Vec<(ClientId, Clientward)> = vec![];
+	let mut to_kick: HashMap<ClientId, KickReason> = HashMap::new();
 
 	loop {
 		// SLEEP maybe
@@ -196,76 +218,84 @@ fn server(addr: &SocketAddr) {
 	    	match listener.accept() {
 	    		Err(ref e) if e.kind() == ErrorKind::WouldBlock => (), //spurious wakeup
 	    		Ok((client_stream, _peer_addr)) => {
-    				println!("Pushing new client. managing {} clients now", client_data.len());
-	    			client_data.push(
+	    			let cid = next_free_cid(& client_data);
+    				println!("Adding new client {:?}. managing {:?} clients now", cid, client_data.len());
+	    			client_data.insert(
+	    				cid,
 	    				ClientData {
 	    					mm: Threadless::new(client_stream),
 	    					state: ClientState::ExpectingHello,
-	    				}
+	    				},
 	    			);
 	    		},
 	    		Err(e) => {
-	    			println!("[echo] listener socket died!");
+	    			println!("[echo] listener socket died! Err {:?}", e);
 	    			return;
 	    		}, //socket has died
 	    	}
 	    }
 
 	    // handle incoming messages
-	    for (i, datum) in client_data.iter_mut().enumerate() {
-	    	println!("visiting client at data index {}", i);
+	    for (&cid, datum) in client_data.iter_mut() {
 	    	loop {
 	    		match datum.mm.try_recv::<Serverward>() {
-	    			Ok(Serverward::Hello{name: name}) => {
-	    				println!("got msg Serverward::Hello<name: {:?}> from client {:?}", &name, i);
+	    			Ok(Serverward::Hello{name: n}) => {
+	    				println!("got msg Serverward::Hello<name: {:?}> from client {:?}", &n, cid);
 	    				match datum.state {
 							ClientState::ExpectingHello => {
-								if game_state.name_taken(&name) {
-									datum.mm.send(& Clientward::BadName);
-									to_kick.insert(i);
+								if game_state.name_taken(&n) {
+									to_kick.insert(cid, KickReason::NameTaken);
 								} else {
-									let id = game_state.add_player(5, name.clone());
-									println!("Client {:?} is playing in slot {:?}", i, id);
-									datum.state = ClientState::Playing(id);
-									datum.mm.send(
-										& Clientward::Welcome { position: id }
-									);
-									datum.mm.send(
+									let row = game_state.add_player(5, n.clone());
+									println!("Client {:?} is playing in row {:?}", cid, row);
+									datum.state = ClientState::Playing(row);
+									let mut success = true;
+									success &= datum.mm.send(
+										& Clientward::Welcome { row: row }
+									).is_ok();
+									success &= datum.mm.send(
 										& Clientward::GameState { state: game_state.clone() }
-									);
-									to_broadcast.push(
-										Clientward::AddPlayer { start_h: 5, name: name },
-									);
+									).is_ok();
+									if success {
+										send_to_all_but.push(
+											(
+												cid,
+												Clientward::AddPlayer { start_h: 5, name: n },
+											)
+										);
+									} else {
+										to_kick.insert(cid, KickReason::SocketErr);
+									}
 								}
 							},
 							ClientState::Playing(_slot) => {
-								to_kick.insert(i); // got HELLO when not expecting it!
+								to_kick.insert(cid, KickReason::UnexpectedHello);
 							},
 	    				}
 	    			}
-	    			Ok(Serverward::MoveMe{ left: left}) => {
+	    			Ok(Serverward::MoveMe{ dir: d }) => {
 						match datum.state {
 							ClientState::ExpectingHello => {
 								println!("Kicking because got MoveMe when expected HELLO");
-								to_kick.insert(i); // you need to hello first, dude
+								to_kick.insert(cid, KickReason::ExpectedHello);
 							},
-							ClientState::Playing(slot) => {
-								if game_state.move_piece(slot, left).is_ok() {
+							ClientState::Playing(row) => {
+								if game_state.move_piece(row, d).is_ok() {
 									println!("legal move!");
 									to_broadcast.push(
-										Clientward::MovePiece { pos: slot, left: left },
+										Clientward::MovePiece { row: row, dir: d },
 									);
 								} else {
 									println!("Illegal move!");
-									to_kick.insert(i);
+									to_kick.insert(cid, KickReason::IllegalMove);
 								}
 							},
 	    				}
 	    			},
 	    			Err(middleman::TryRecvError::ReadNotReady) => break,
 	    			Err(e) => {
-	    				println!("Oh no! client {:?} has problemz", i);
-						to_kick.insert(i);
+	    				println!("Oh no! client {:?} has problemz {:?}", cid, e);
+						to_kick.insert(cid, KickReason::SocketErr);
 						break;
 	    			},
 	    		}
@@ -273,28 +303,37 @@ fn server(addr: &SocketAddr) {
 	    }
 
 	    // kick players
-	    println!("kicking players");
 	    if to_kick.len() > 0 {
-	    	let mut indices = to_kick.drain().collect::<Vec<_>>();
-	    	indices.sort();
-	    	indices.reverse();
-	    	for ii in indices {
-	    		if let ClientState::Playing(slot) = client_data[ii].state {
-	    			if game_state.remove_player(ii).is_ok() {
-	    				to_broadcast.push(
-	    					Clientward::RemovePlayer { pos: slot }
-	    				);
-	    			}
-	    		}
-	    		println!("Kicking client {:?}", ii);
-	    		client_data.remove(ii);
+	    	for (cid, kick_msg) in to_kick.drain() {
+	    		println!("Kicking {:?} for reason: {:?}", cid, & kick_msg);
+	    		{
+	    			let mut datum = client_data.get_mut(&cid).expect("kicking nonexistant?");
+		    		if let ClientState::Playing(r) = datum.state {
+		    			if game_state.remove_player(r).is_ok() {
+		    				send_to_all_but.push((cid, Clientward::RemovePlayer { row: r }));
+		    			}
+		    		}
+		    		let _ = datum.mm.send(& Clientward::KickingYou { kick_reason: kick_msg });
+		    	}
+	    		client_data.remove(&cid);
 	    	}
 	    }
 
 	    // broadcast
 	    for msg in to_broadcast.drain(..) {
-	    	for datum in client_data.iter_mut() {
-	    		datum.mm.send(& msg);
+	    	println!("Sending {:?} to all.", &msg);
+	    	for (_cid, datum) in client_data.iter_mut() {
+	    		let _ = datum.mm.send(& msg); //errors will be detected later
+	    	} 
+	    }
+
+	    // send to all but cid
+	    for (cid, msg) in send_to_all_but.drain(..) {
+	    	println!("Sending {:?} to all but {:?}", &msg, cid);
+	    	for (&cid2, mut datum) in client_data.iter_mut() {
+	    		if cid != cid2 {
+	    			let _ = datum.mm.send(& msg); //errors will be detected later
+	    		}
 	    	} 
 	    }
 	}
@@ -304,33 +343,34 @@ fn server(addr: &SocketAddr) {
 #[derive(Debug, Serialize, Deserialize)]
 enum Serverward {
 	Hello { name: String },
-	MoveMe { left: bool },
+	MoveMe { dir: Direction },
 }
 impl Message for Serverward {}
 
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+enum KickReason {
+	ExpectedHello,
+	UnexpectedHello,
+	IllegalMove,
+	NameTaken,
+	SocketErr,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 enum Clientward {
-	Welcome { position: usize },
-	BadName,
-	MovePiece { pos: usize, left: bool },
+	Welcome { row: usize },
+	MovePiece { row: usize, dir: Direction },
 	AddPlayer { start_h: u32, name: String },
-	RemovePlayer { pos: usize },
+	RemovePlayer { row: usize },
 	GameState { state: GameState }, 
+	KickingYou{ kick_reason: KickReason },
 }
 impl Message for Clientward {}
 
-// fn server_handle(mut stream: TcpStream) {
-// 	stream.set_nodelay(true).ok();
-// 	let mut mm = Threadless::new(stream);
-// 	if let Ok(Serverward::Hello{ name: name}) = mm.recv::<Serverward>() {
-// 		println!("Got hello from {:?}", &name);
-// 		mm.send(& Clientward::).ok();
-// 	}
-// }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 struct GameState {
-	position: Vec<(u32, String)>,
+	rows: Vec<(u32, String)>,
 }
 
 
@@ -339,12 +379,12 @@ impl GameState {
 
 	fn new() -> Self {
 		GameState {
-			position: vec![],
+			rows: vec![],
 		}
 	}
 
 	fn name_taken(&self, name: &str) -> bool {
-		for p in self.position.iter() {
+		for p in self.rows.iter() {
 			if p.1 == name {
 				return true;
 			}
@@ -352,56 +392,60 @@ impl GameState {
 		false
 	}
 
-	fn pos_exists(&self, pos: usize) -> bool {
-		self.position.len() > pos
+	fn row_exists(&self, row: usize) -> bool {
+		self.rows.len() > row
 	}
-	fn move_piece(&mut self, pos: usize, left: bool) -> Result<(), &'static str> {
-		if !self.pos_exists(pos) {
-			return Err("No such position!")
+	fn move_piece(&mut self, row: usize, dir: Direction) -> Result<(), &'static str> {
+		if !self.row_exists(row) {
+			return Err("No such row!")
 		}
-		let pos = &mut self.position[pos];
-		if left {
-			if pos.0 == 0 {
-				return Err("too far left!")	
-			}		
-			pos.0 -= 1;	
-			Ok(())
-		} else { //right
-			if pos.0 == GAME_WIDTH-1 {
-				return Err("too far right!")	
-			}
-			pos.0 += 1;
-			Ok(())
+		let row_h = &mut self.rows[row];
+		match dir {
+			Direction::Left => {
+				if row_h.0 == 0 {
+					return Err("too far left!")	
+				}		
+				row_h.0 -= 1;	
+				Ok(())
+			},
+			Direction::Right => {
+				if row_h.0 == GAME_WIDTH-1 {
+					return Err("too far right!")	
+				}
+				row_h.0 += 1;
+				Ok(())
+			},
 		}
 	}
 
 	fn add_player(&mut self, start_h: u32, name: String) -> usize {
-		self.position.push((start_h, name));
-		self.position.len() - 1
+		self.rows.push((start_h, name));
+		self.rows.len() - 1
 	}
 
-	fn remove_player(&mut self, pos: usize) -> Result<(), &'static str>{
-		if !self.pos_exists(pos) {
+	fn remove_player(&mut self, row: usize) -> Result<(), &'static str>{
+		if !self.row_exists(row) {
 			return Err("Cant remove");
 		}
-		self.position.remove(pos);
+		self.rows.remove(row);
 		Ok(())
 	}
 
 	fn draw(&self) {
 		println!();
-		for (i, p) in self.position.iter().enumerate() {
-			print!("{:?} [", p);
-			for _ in 0..p.0 {
+		for (i, row_h) in self.rows.iter().enumerate() {
+			print!("{:?} [", i);
+			for _ in 0..row_h.0 {
 				print!(" ");
 			}
 			print!("$");
-			for _ in p.0..GAME_WIDTH {
+			for _ in row_h.0..GAME_WIDTH {
 				print!(" ");
 			}
-			print!("] {:?}", &p.1);
+			print!("] {:?}", &row_h.1);
 			println!();
 		}
+		stdout().flush();
 	}
 }
 
