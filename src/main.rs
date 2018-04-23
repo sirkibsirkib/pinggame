@@ -10,7 +10,6 @@ use clap::App;
 use middleman::{
 	Middleman,
 	Message,
-	Threadless,
 };
 
 use std::{
@@ -29,13 +28,16 @@ use mio::{
 	PollOpt,
 	Events,
 	Token,
-	Evented,
+	// Evented,
 	tcp::{
 		TcpListener,
 		TcpStream,
 	},
 };
-use mio_extras::channel::channel;
+use mio_extras::channel::{
+	channel,
+	Sender,
+};
 
 fn main() {
 	let matches = App::new("Pinggame")
@@ -62,111 +64,127 @@ fn main() {
     };
 }
 
-fn client(addr: &SocketAddr, name: String) {
-	println!("CLIENT START with name `{}`", &name);
-
-	let sock = TcpStream::connect(&addr).unwrap();
-	let mut mm = Threadless::new(sock);
-	mm.send(& Serverward::Hello{ name: name }).expect("hello failed");
-	match mm.recv::<Clientward>() {
-		Ok(Clientward::Welcome{ row: r}) => {
-			client_play(r, mm)
-		},
-		x => {
-			println!("CLIENT EXPECTED WELCOME {:?}", &x);
-			return;
-		},
-	}
-	
-}
-
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
 enum Direction { //TODO
 	Left,
 	Right,
 }
 
-fn client_play<M: Middleman>(row: usize, mut mm: M) {
-	println!("I have been given row {:?}", row);
+
+fn handle_clientward(msg: Clientward, game_state: &mut GameState) -> bool {
+	println!("Got {:?} from server...", msg);
+	match msg {
+		Clientward::Welcome { row: _r } => (), // wtf
+		Clientward::MovePiece { row: r, dir: d } => {
+			println!("moving piece in row {:?} in {:?}", r, d );
+			game_state.move_piece(r, d).expect("move failed");
+			game_state.draw();
+		},
+		Clientward::AddPlayer { start_h: s, name: n } => {
+			game_state.add_player(s, n);
+			game_state.draw();
+		},
+		Clientward::RemovePlayer { row: r } => {
+			game_state.remove_player(r).expect("couldnt remove");
+			game_state.draw();
+		},
+		Clientward::GameState { state: g } => {
+			*game_state = g;
+			game_state.draw();
+		}, 
+		Clientward::KickingYou { kick_reason: kick_msg } => {
+			println!("Ive been kicked! {:?}", kick_msg);
+			return true;
+		} 
+	};
+	false
+}
+
+
+fn key_loop(s: Sender<Direction>) {
+	let mut buffer = String::new();
+	println!("keylister going at it...");
+	loop {
+		// println!("keylister reading line...");
+		buffer.clear();
+    	std::io::stdin().read_line(&mut buffer).unwrap();
+    	println!("keylister sending {:?}", &buffer);
+    	match buffer.trim() {
+    		"l" => {
+    			s.send(Direction::Left).ok();
+    		},
+    		"r" => {
+    			s.send(Direction::Right).ok();
+    		},
+    		s => {println!("read `{}`", s);},
+    	}
+	}
+}
+const SERVER_TOK: Token = Token(0);
+const KEY_TOK: Token = Token(1);
+
+
+fn client(addr: &SocketAddr, name: String) {
+	let poll = Poll::new().unwrap();
+    let mut events = Events::with_capacity(256);
 	let mut game_state = GameState::new();
 
+	let sock = TcpStream::connect(&addr).unwrap();
+	let mut mm = Middleman::new(sock);
+    poll.register(&mm, SERVER_TOK, Ready::readable() | Ready::writable(),
+                  PollOpt::edge()).unwrap();
+    let mut spillover = vec![];
 
-    // handle ACCEPTING
-
-	let (s, r) = channel(); //channel between keylistener thread and main
-	let _handle = thread::spawn(move || {
-		let mut buffer = String::new();
-		println!("keylister going at it...");
-		loop {
-			println!("keylister reading line...");
-			buffer.clear();
-	    	std::io::stdin().read_line(&mut buffer).unwrap();
-	    	match buffer.trim() {
-	    		"l" => {
-	    			s.send(Direction::Left).ok();
-	    		},
-	    		"r" => {
-	    			s.send(Direction::Right).ok();
-	    		},
-	    		_ => {println!("read `{}`", &buffer);},
-	    	}
-		}
+    // keylistener thread
+	let (s, r) = channel(); 
+    poll.register(&r, KEY_TOK, Ready::readable(), PollOpt::edge()).unwrap();
+    let _handle = thread::spawn(move || {
+		key_loop(s);
 	});
 
+	mm.send(& Serverward::Hello{ name: name }).expect("hello failed");
+	let row = match mm.recv_blocking(&poll, &mut events, SERVER_TOK, &mut spillover, None) {
+		Ok(Some(Clientward::Welcome {row : r})) => r,
+		x => {
+			println!("unexpected welcome {:?}", &x);
+			panic!("FAK");
+		},
+	};
 
+	println!("I have been given row {:?}", row);
+	let mut game_going = true;
 
-	let poll = Poll::new().unwrap();
-	poll.register(&r, Token(0), Ready::readable(),
-				PollOpt::edge()).unwrap();
-	let mut events = Events::with_capacity(128);
-	let tick_millis = std::time::Duration::from_millis(300);
-
-	loop {
-   		poll.poll(&mut events, Some(tick_millis)).unwrap();
-    	for _event in events.iter() {
-    		if let Ok(d) = r.try_recv() {
-				//request a move
-				mm.send(& Serverward::MoveMe { dir: d } ).ok();
-				println!("Sending req done");
-			}
+	while game_going {
+   		poll.poll(&mut events, None).unwrap();
+		// println!("events...");
+    	for event in events.iter().chain(spillover.drain(..)) {
+    		// println!("token {:?}", event.token());
+    		match event.token() {
+    			SERVER_TOK => {
+    				if let Err(err) = mm.read_write(&event) {
+    					println!("server connection issue! {:?}", err);
+    					game_going = false;
+    				}
+    			},
+    			KEY_TOK => {
+    				// println!("key event!!");
+    				if let Ok(d) = r.try_recv() {
+    					mm.send(& Serverward::MoveMe { dir: d } ).ok();
+    					mm.write_out().ok();
+						println!("Sending req done");
+    				}
+    			}
+    			_ => unreachable!(),
+    		}
     	}
 
-		match mm.try_recv::<Clientward>() {
-			Ok(msg) => {
-				;
-				println!("Got {:?} from server...", msg);
-				match msg {
-					Clientward::Welcome { row: _r } => (), // wtf
-					Clientward::MovePiece { row: r, dir: d } => {
-						println!("moving piece in row {:?} in {:?}", r, d );
-						game_state.move_piece(r, d).expect("move failed");
-						game_state.draw();
-					},
-					Clientward::AddPlayer { start_h: s, name: n } => {
-						game_state.add_player(s, n);
-						game_state.draw();
-					},
-					Clientward::RemovePlayer { row: r } => {
-						game_state.remove_player(r).expect("couldnt remove");
-						game_state.draw();
-					},
-					Clientward::GameState { state: g } => {
-						game_state = g;
-						game_state.draw();
-					}, 
-					Clientward::KickingYou { kick_reason: kick_msg } => {
-						println!("Ive been kicked! {:?}", kick_msg);
-						return;
-					} 
-				}
-			},
-			Err(middleman::TryRecvError::ReadNotReady) => (),
-			Err(e) => {
-				println!("Something went wrong {:?}", e);
-				return;
-			}
-		}
+    	mm.try_recv_all_map::<_, Clientward>(|msg| {
+    		if handle_clientward(msg, &mut game_state) {
+    			game_going = false;
+    		}
+    	}).1.expect("something went wrong");
 	}
+	println!("game over!");
 }
 
 
@@ -174,128 +192,181 @@ enum ClientState {
 	ExpectingHello,
 	Playing(usize),
 }
-struct ClientData<M: Middleman> {
-	mm: M,
+struct ClientData {
+	mm: Middleman,
 	state: ClientState,
 }
 
 
-#[derive(Copy, Clone, Hash, Eq, PartialEq, Debug)]
-struct ClientId(u32);
+// #[derive(Copy, Clone, Hash, Eq, PartialEq, Debug)]
+// struct ClientId(u32);
+type ClientId = Token;
 
 
-fn next_free_cid<M: Middleman>(client_data: &HashMap<ClientId, ClientData<M>>) -> ClientId {
-	for id in 0.. {
-		let cid = ClientId(id);
+fn next_free_cid(client_data: &ClientDataMap) -> ClientId {
+	for id in 1.. {
+		let cid = Token(id);
 		if !client_data.contains_key(& cid) {
 			return cid
 		}
 	}
-	panic!("Ran out of IDS?");
+	panic!("Ran out of TOKENS?");
 }
 
-// spawn an echo server on localhost. return the thread handle and the bound ip addr.
+
+fn handle_new_socket(poll: &Poll, listener: &TcpListener, client_data: &mut ClientDataMap) {
+	match listener.accept() {
+		Err(ref e) if e.kind() == ErrorKind::WouldBlock => (), //spurious wakeup
+		Ok((client_stream, _peer_addr)) => {
+			let cid = next_free_cid(client_data as &ClientDataMap);
+			println!("Adding new client {:?}. managing {:?} clients now", cid, client_data.len()+1);
+			let mm = Middleman::new(client_stream);
+    		poll.register(&mm, cid, Ready::readable() | Ready::writable(),
+                  PollOpt::edge()).unwrap();
+			client_data.insert(
+				cid,
+				ClientData {
+					mm:		mm,
+					state:	ClientState::ExpectingHello,
+				},
+			);
+		},
+		Err(e) => {
+			println!("[echo] listener socket died! Err {:?}", e);
+			return;
+		},
+	}
+}
+
+
+
+fn handle_incoming(msg: Serverward, cid: Token, datum: &mut ClientData, server_state: &mut ServerState) {
+	println!("Server got msg {:?}", &msg);
+	match msg {
+		Serverward::MoveMe{ dir: d } => {
+			match datum.state {
+				ClientState::ExpectingHello => {
+					println!("Kicking because got MoveMe when expected HELLO");
+					server_state.to_kick.insert(cid, KickReason::ExpectedHello);
+				},
+				ClientState::Playing(row) => {
+					if server_state.game_state.move_piece(row, d).is_ok() {
+						println!("legal move!");
+						server_state.to_broadcast.push(
+							Clientward::MovePiece { row: row, dir: d },
+						);
+					} else {
+						println!("Illegal move!");
+						server_state.to_kick.insert(cid, KickReason::IllegalMove);
+					}
+				},
+			}
+		},
+		Serverward::Hello{name: n} => {
+			println!("got msg Serverward::Hello<name: {:?}> from client {:?}", &n, cid);
+			match datum.state {
+				ClientState::ExpectingHello => {
+					if server_state.game_state.name_taken(&n) {
+						server_state.to_kick.insert(cid, KickReason::NameTaken);
+					} else {
+						let row = server_state.game_state.add_player(5, n.clone());
+						println!("Client {:?} is playing in row {:?}", cid, row);
+						datum.state = ClientState::Playing(row);
+						let mut success = true;
+						success &= datum.mm.send(
+							& Clientward::Welcome { row: row }
+						).is_ok();
+						success &= datum.mm.send(
+							& Clientward::GameState { state: server_state.game_state.clone() }
+						).is_ok();
+						if success {
+							server_state.send_to_all_but.push(
+								(
+									cid,
+									Clientward::AddPlayer { start_h: 5, name: n },
+								)
+							);
+						} else {
+							server_state.to_kick.insert(cid, KickReason::SocketErr);
+						}
+					}
+				},
+				ClientState::Playing(_slot) => {
+					server_state.to_kick.insert(cid, KickReason::UnexpectedHello);
+				},
+			}
+		},
+	}	
+}
+
+type ToKick = HashMap<ClientId, KickReason>;
+type SendToAllBut = Vec<(ClientId, Clientward)>;
+type ClientDataMap = HashMap<Token, ClientData>;
+type ToBroadcast = Vec<Clientward>;
+
+const LISTENER_TOK: Token = Token(0);
+
+
+struct ServerState {
+	to_kick: ToKick,
+	to_broadcast: ToBroadcast,
+	send_to_all_but: SendToAllBut,
+	game_state: GameState,
+}
+
 fn server(addr: &SocketAddr) {
 	let listener = TcpListener::bind(addr).unwrap();
 	let poll = Poll::new().unwrap();
-	poll.register(&listener, Token(0), Ready::readable(),
+	poll.register(&listener, LISTENER_TOK, Ready::readable(),
 		PollOpt::edge()).unwrap();
-	let mut events = Events::with_capacity(128);
-	let tick_millis = std::time::Duration::from_millis(300);
 
-	let mut game_state = GameState::new();
-	let mut client_data = HashMap::new();
-	let mut to_broadcast = vec![];
-	let mut send_to_all_but: Vec<(ClientId, Clientward)> = vec![];
-	let mut to_kick: HashMap<ClientId, KickReason> = HashMap::new();
+	let mut events = Events::with_capacity(256);
+
+	let mut server_state = ServerState {
+		to_kick: HashMap::new(),
+		send_to_all_but: vec![],
+		to_broadcast: vec![],
+		game_state: GameState::new(),
+	};
+
+	// let mut game_state = GameState::new();
+	let mut client_data: ClientDataMap = HashMap::new();
+	// let mut to_broadcast: ToBroadcast = vec![];
+	// let mut send_to_all_but: SendToAllBut = vec![];
+	// let mut to_kick: ToKick = HashMap::new();
 
 	loop {
-		// SLEEP maybe
-	    poll.poll(&mut events, Some(tick_millis)).unwrap();
+		// poll for new activity
+	    poll.poll(&mut events, None).unwrap();
 
-	    // handle ACCEPTING
-	    for _event in events.iter() {
-	    	match listener.accept() {
-	    		Err(ref e) if e.kind() == ErrorKind::WouldBlock => (), //spurious wakeup
-	    		Ok((client_stream, _peer_addr)) => {
-	    			let cid = next_free_cid(& client_data);
-    				println!("Adding new client {:?}. managing {:?} clients now", cid, client_data.len());
-	    			client_data.insert(
-	    				cid,
-	    				ClientData {
-	    					mm: Threadless::new(client_stream),
-	    					state: ClientState::ExpectingHello,
-	    				},
-	    			);
-	    		},
-	    		Err(e) => {
-	    			println!("[echo] listener socket died! Err {:?}", e);
-	    			return;
-	    		}, //socket has died
-	    	}
+	    // handle events
+	    // println!("events");
+	    for event in events.iter() {
+	    	let token = event.token();
+	    	// println!("token {:?}", token);
+	    	if token == LISTENER_TOK {
+    			handle_new_socket(&poll, &listener, &mut client_data);
+	    	} else if let Some(mut datum) = client_data.get_mut(& token) {
+	    		if let Err(err) = datum.mm.read_write(&event) {
+					println!("Oh no! client {:?} has problemz {:?}", token, err);
+					server_state.to_kick.insert(token, KickReason::SocketErr);
+					break;
+	    		}
+    		} else {
+    			println!("Unknown token {:?}", token);
+    			panic!("Unknown Token");
+    		}
 	    }
 
 	    // handle incoming messages
-	    for (&cid, datum) in client_data.iter_mut() {
+	    for (&cid, mut datum) in client_data.iter_mut() {
 	    	loop {
 	    		match datum.mm.try_recv::<Serverward>() {
-	    			Ok(Serverward::Hello{name: n}) => {
-	    				println!("got msg Serverward::Hello<name: {:?}> from client {:?}", &n, cid);
-	    				match datum.state {
-							ClientState::ExpectingHello => {
-								if game_state.name_taken(&n) {
-									to_kick.insert(cid, KickReason::NameTaken);
-								} else {
-									let row = game_state.add_player(5, n.clone());
-									println!("Client {:?} is playing in row {:?}", cid, row);
-									datum.state = ClientState::Playing(row);
-									let mut success = true;
-									success &= datum.mm.send(
-										& Clientward::Welcome { row: row }
-									).is_ok();
-									success &= datum.mm.send(
-										& Clientward::GameState { state: game_state.clone() }
-									).is_ok();
-									if success {
-										send_to_all_but.push(
-											(
-												cid,
-												Clientward::AddPlayer { start_h: 5, name: n },
-											)
-										);
-									} else {
-										to_kick.insert(cid, KickReason::SocketErr);
-									}
-								}
-							},
-							ClientState::Playing(_slot) => {
-								to_kick.insert(cid, KickReason::UnexpectedHello);
-							},
-	    				}
-	    			}
-	    			Ok(Serverward::MoveMe{ dir: d }) => {
-						match datum.state {
-							ClientState::ExpectingHello => {
-								println!("Kicking because got MoveMe when expected HELLO");
-								to_kick.insert(cid, KickReason::ExpectedHello);
-							},
-							ClientState::Playing(row) => {
-								if game_state.move_piece(row, d).is_ok() {
-									println!("legal move!");
-									to_broadcast.push(
-										Clientward::MovePiece { row: row, dir: d },
-									);
-								} else {
-									println!("Illegal move!");
-									to_kick.insert(cid, KickReason::IllegalMove);
-								}
-							},
-	    				}
-	    			},
-	    			Err(middleman::TryRecvError::ReadNotReady) => break,
+	    			Ok(None) => break, // not ready
+	    			Ok(Some(msg)) => handle_incoming(msg, cid, &mut datum, &mut server_state),
 	    			Err(e) => {
 	    				println!("Oh no! client {:?} has problemz {:?}", cid, e);
-						to_kick.insert(cid, KickReason::SocketErr);
+						server_state.to_kick.insert(cid, KickReason::SocketErr);
 						break;
 	    			},
 	    		}
@@ -303,36 +374,40 @@ fn server(addr: &SocketAddr) {
 	    }
 
 	    // kick players
-	    if to_kick.len() > 0 {
-	    	for (cid, kick_msg) in to_kick.drain() {
-	    		println!("Kicking {:?} for reason: {:?}", cid, & kick_msg);
-	    		{
-	    			let mut datum = client_data.get_mut(&cid).expect("kicking nonexistant?");
-		    		if let ClientState::Playing(r) = datum.state {
-		    			if game_state.remove_player(r).is_ok() {
-		    				send_to_all_but.push((cid, Clientward::RemovePlayer { row: r }));
-		    			}
-		    		}
-		    		let _ = datum.mm.send(& Clientward::KickingYou { kick_reason: kick_msg });
-		    	}
-	    		client_data.remove(&cid);
+    	for (cid, kick_msg) in server_state.to_kick.drain() {
+    		println!("Kicking {:?} for reason: {:?}", cid, & kick_msg);
+    		{
+    			let mut datum = client_data.get_mut(&cid).expect("kicking nonexistant?");
+    			poll.deregister(&datum.mm).expect("dereg failed");
+	    		if let ClientState::Playing(r) = datum.state {
+	    			if server_state.game_state.remove_player(r).is_ok() {
+	    				server_state.send_to_all_but.push((cid, Clientward::RemovePlayer { row: r }));
+	    			}
+	    		}
+	    		let _ = datum.mm.send(& Clientward::KickingYou { kick_reason: kick_msg });
 	    	}
-	    }
+    		client_data.remove(&cid);
+    	}
 
 	    // broadcast
-	    for msg in to_broadcast.drain(..) {
+	    for msg in server_state.to_broadcast.drain(..) {
 	    	println!("Sending {:?} to all.", &msg);
 	    	for (_cid, datum) in client_data.iter_mut() {
-	    		let _ = datum.mm.send(& msg); //errors will be detected later
+	    		if datum.mm.send(& msg).is_ok() {
+	    			datum.mm.write_out().ok();
+	    		}
 	    	} 
 	    }
 
 	    // send to all but cid
-	    for (cid, msg) in send_to_all_but.drain(..) {
+	    for (cid, msg) in server_state.send_to_all_but.drain(..) {
 	    	println!("Sending {:?} to all but {:?}", &msg, cid);
 	    	for (&cid2, mut datum) in client_data.iter_mut() {
 	    		if cid != cid2 {
-	    			let _ = datum.mm.send(& msg); //errors will be detected later
+	    			println!("...sending to {:?}", cid2);
+	    			if datum.mm.send(& msg).is_ok() {
+	    				datum.mm.write_out().ok();
+	    			}
 	    		}
 	    	} 
 	    }
@@ -445,7 +520,7 @@ impl GameState {
 			print!("] {:?}", &row_h.1);
 			println!();
 		}
-		stdout().flush();
+		let _ = stdout().flush();
 	}
 }
 
