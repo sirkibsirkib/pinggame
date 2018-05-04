@@ -68,13 +68,14 @@ fn main() {
 
 ////////////////////////////////////////////////////////////
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum ClientWard {
+pub enum Clientward {
 	Welcome(GameState, Coord2D),
 	UpdMove(Moniker, Direction),
 	ErrorTakenMoniker,
 	ErrorIllegalMove,
+	ErrorSocketDead,
 }
-impl middleman::Message for ClientWard {}
+impl middleman::Message for Clientward {}
 
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -111,6 +112,8 @@ struct ClientObject {
 use std::collections::HashMap;
 const LISTENER_TOKEN: Token = Token(0);
 
+
+
 fn server(addr: &SocketAddr) {
 	println!("Server starting at addr {:?}!", addr);
 	let listener = MioListener::bind(addr)
@@ -121,7 +124,7 @@ fn server(addr: &SocketAddr) {
     poll.register(&listener, LISTENER_TOKEN, Ready::readable(), PollOpt::edge()).unwrap();
     let mut clients: Clients = HashMap::new();
 	let mut newcomers: HashMap<Token, Middleman> = HashMap::new();
-	// let mut newcomer_buffer = vec![];
+	let mut server_control: Vec<ServerCtrlMsg> = vec![];
 	let mut game_state = GameState::new();
     loop {
     	poll.poll(&mut events, None).unwrap();
@@ -142,61 +145,82 @@ fn server(addr: &SocketAddr) {
 					}
     			},
     			tok => {
-    				if newcomers.contains_key(&tok) {
-    					handle_newcomer_incoming(&mut newcomers, tok, &mut game_state, &mut clients, &poll);
+    				if clients.contains_key(&tok) {
+    					handle_client_incoming(&mut clients, tok, &mut server_control)
+    				} else if newcomers.contains_key(&tok) {
+    					handle_newcomer_incoming(&mut newcomers, tok, &mut server_control);
+    				} else {
+    					panic!("WHOSE TOKEN??");
     				}
-    				//TODO
     			},
     		}
+    	}
+
+    	if !server_control.is_empty() {
+    		do_server_control(&mut server_control, &mut newcomers,
+    			              &mut clients, &poll, &mut game_state);
     	}
     }
 }
 
 
-#[derive(PartialEq, Copy, Clone, Eq)]
-enum NewcomerOutcome {
-	Discard,
-	Upgrade(Moniker),
-	Nothing,
+enum ServerCtrlMsg {
+	DropNewcomerWithErr(Token, Clientward),
+	DropClientWithErr(Token, Clientward),
+	UpgradeClient(Token, Moniker),
 }
-fn handle_newcomer_incoming(newcomers: &mut Newcomers, tok: Token, game_state: &mut GameState, clients: &mut Clients, poll: &Poll) {
-	let mut newcomer_outcome = NewcomerOutcome::Nothing;
-	{// scoping `mm`
-		let mm: &mut Middleman = newcomers.get_mut(&tok).expect("newcomer incoming");
-		let closure = |mut me: &mut Middleman, msg| {
-			if let Serverward::Hello(moniker) = msg {
+fn do_server_control(server_control: &mut Vec<ServerCtrlMsg>, newcomers: &mut Newcomers,
+	                 clients: &mut Clients, poll: &Poll, game_state: &mut GameState)
+{
+	for ctrl_msg in server_control.drain(..) {
+		match ctrl_msg {
+			ServerCtrlMsg::DropNewcomerWithErr(tok, msg) => {
+
+			},
+			ServerCtrlMsg::DropClientWithErr(tok, msg) => {
+
+			},
+			ServerCtrlMsg::UpgradeClient(tok, moniker) => {
+				let mut mm = newcomers.remove(&tok).unwrap();
 				if game_state.contains_moniker(moniker) {
-					let _ = me.send(& ClientWard::ErrorTakenMoniker);
-					newcomer_outcome = NewcomerOutcome::Discard;
+					let _ = mm.send(& Clientward::ErrorTakenMoniker);
 				} else {
 					let coord = game_state.random_free_spot().expect("GAME TOO FULL");
 					if game_state.try_put_moniker(moniker, coord) {
-						if me.send(& ClientWard::Welcome(game_state.clone() , coord)).is_ok {
-							newcomer_outcome = NewcomerOutcome::Upgrade(moniker);
-						} else {
-							newcomer_outcome = NewcomerOutcome::Discard;
+						if mm.send(& Clientward::Welcome(game_state.clone() , coord)).is_ok() {
+							poll.register(&mm, tok,
+						    			Ready::readable(),
+						    			PollOpt::edge()).unwrap();
+				    		let x = ClientObject {
+				    			moniker: moniker,
+				    			middleman: mm,
+				    		};
+				    		clients.insert(tok, x);
 						}
 					}
 				}
+			},
+		}
+	}
+}
+
+
+fn handle_client_incoming(clients: &mut Clients, tok: Token, server_control: &mut Vec<ServerCtrlMsg>) {
+
+}
+
+fn handle_newcomer_incoming(newcomers: &mut Newcomers, tok: Token, server_control: &mut Vec<ServerCtrlMsg>) {
+	use ServerCtrlMsg::UpgradeClient;
+	let mut done = false;
+	let mm: &mut Middleman = newcomers.get_mut(&tok).expect("newcomer incoming");
+	mm.recv_all_map( |_me, msg| {
+		if let Serverward::Hello(moniker) = msg {
+			if !done {
+				server_control.push(UpgradeClient(tok, moniker));
+				done = true;
 			}
-		};
-		mm.recv_all_map(closure);
-	}
-	match newcomer_outcome {
-		NewcomerOutcome::Nothing => (),
-		NewcomerOutcome::Discard => { newcomers.remove(&tok); },
-		NewcomerOutcome::Upgrade(moniker) => {
-			let mm = newcomers.remove(&tok).unwrap();
-    		poll.register(&mm, tok,
-		    			Ready::readable(),
-		    			PollOpt::edge()).unwrap();
-    		let x = ClientObject {
-    			moniker: moniker,
-    			middleman: mm,
-    		};
-    		clients.insert(tok, x);
-		},
-	}
+		}
+	});
 }
 
 fn next_free_token(c: &Clients, n: &Newcomers) -> Token {
