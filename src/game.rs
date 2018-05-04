@@ -1,23 +1,50 @@
+use rand::{
+	thread_rng,
+	Rng,
+};
+
 #[derive(Copy, Clone, Eq, PartialEq, Serialize, Deserialize, Debug)]
 pub struct Moniker(pub char);
 
 pub type ValidMove = bool;
 
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize, Debug)]
-pub struct State {
+pub struct GameState {
 	monikers: Vec<(Coord2D, Moniker)>, 
 }
-impl State {
+impl GameState {
 	const WIDTH: u16 = 16;
 	const HEIGHT: u16 = 16;
 
 	pub fn new() -> Self {
-		State {
+		GameState {
 			monikers: vec![],
 		}
 	}
 
-	pub fn put_moniker(&mut self, moniker: Moniker, coord: Coord2D) -> ValidMove {
+	pub fn contains_moniker(&self, moniker: Moniker) -> bool {
+		self.find_moniker_index(moniker).is_none()
+	}
+
+	pub fn random_free_spot(&self) -> Option<Coord2D> {
+		if self.monikers.len()/2 >= (Self::WIDTH * Self::HEIGHT) as usize {
+			return None
+			// TODO linear probing or something better. Fine for now
+		}
+		let mut rng = thread_rng();
+		let mut coord;
+		loop {
+			coord = Coord2D::new(
+				rng.gen_range(0, Self::WIDTH),
+				rng.gen_range(0, Self::HEIGHT),
+			);
+			if self.find_coord_index(coord).is_none() {
+				return Some(coord);
+			}
+		}
+	}
+
+	pub fn try_put_moniker(&mut self, moniker: Moniker, coord: Coord2D) -> ValidMove {
 		if self.find_coord_index(coord).is_some() {
 			return false;
 		}
