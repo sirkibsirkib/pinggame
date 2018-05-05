@@ -20,7 +20,8 @@ $ cargo build --release
     Finished release [optimized] target(s) in 270.70 secs
 $
 ```
-1. If it doesn't go well, you likely need to relook the SDL2 step above.
+(If it doesn't work, you likely need to relook the SDL2 step above).
+That's it. You'll find the finished _binary_ in `./target/release/` called `pinggame` or `pinggame.exe`. Depending on what you needed to do in the SDL2 step, you may need to ensure this file is in a certain place or something. For example, on windows it must be in the same directory as `SDL2.dll`.
 
 ## Playing
 Once you have your executable (called `pinggame` or `pinggame.exe`), you can run it in your terminal.
