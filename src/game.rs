@@ -78,25 +78,39 @@ impl GameState {
 	}
 
 	pub fn move_moniker_in_dir(&mut self, moniker: Moniker, dir: Direction) -> ValidMove {
+		let current_pos;
 		if let Some(index) = self.find_moniker_index(moniker) {
+			let &mut (c, _p) = &mut self.monikers[index];
+			current_pos = c;
+		} else {
+			return false // no such moniker
+		};
+		if self.can_move_at(current_pos, dir) {
+			let index = self.find_moniker_index(moniker).unwrap();
 			let &mut (ref mut c, _p) = &mut self.monikers[index];
-			if !Self::can_move_at(*c, dir) {
-				return false; // would move out of bounds
-			}
 			c.move_with(dir);
 			true
 		} else {
-			false // no such moniker
+			false
 		}
 	} 
 
-	pub fn can_move_at(coord: Coord2D, dir: Direction) -> bool {
-		match dir {
+	pub fn can_move_at(&self, coord: Coord2D, dir: Direction) -> bool {
+		if !match dir {
 			Direction::Up => coord.y > 0,
 			Direction::Down => coord.y < Self::HEIGHT-1,
 			Direction::Left => coord.x > 0,
 			Direction::Right => coord.x < Self::WIDTH-1,
+		} {
+			return false; // end of boundary
 		}
+		let coord2 = match dir {
+			Direction::Up => Coord2D { x:coord.x, y:coord.y-1 },
+			Direction::Down => Coord2D { x:coord.x, y:coord.y-1 },
+			Direction::Left => Coord2D { x:coord.x, y:coord.y-1 },
+			Direction::Right => Coord2D { x:coord.x, y:coord.y-1 },
+		};
+		return self.find_coord_index(coord2).is_none()
 	}
 
 	pub fn iter(&self) -> Wrapper {
