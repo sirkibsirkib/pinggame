@@ -154,7 +154,7 @@ impl event::EventHandler for ClientState {
         mm.recv_all_map( |_me, msg| {
         	// println!("got {:?} from server", &msg);
             match msg {
-                Welcome(_) => (),
+                Welcome(_) => panic!("Not expecting a welcome"),
                 AddPlayer(moniker, coord) => {
     				insert_into_cache(ctx, tx_cache, moniker);
                     gs.try_put_moniker(moniker, coord);
@@ -168,6 +168,7 @@ impl event::EventHandler for ClientState {
                 },
                 some_err => {
                     println!("Server sent err msg {:?}", some_err);
+                    panic!("server sent err");
                 },
             };
         }).1.expect("Failed to read from server!");
