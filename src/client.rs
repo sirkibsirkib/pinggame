@@ -84,6 +84,9 @@ fn client_go(mut mm: Middleman, my_moniker: Moniker) {
         no_change: false,
         text_cache: HashMap::new(),
     };
+    for &(_, moniker) in game_state.iter() {
+    	insert_into_cache(ctx, &mut cs.text_cache, moniker);
+    }
     insert_into_cache(ctx, &mut cs.text_cache, my_moniker);
     event::run(ctx, &mut cs).unwrap();
 }
