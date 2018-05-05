@@ -106,9 +106,9 @@ impl GameState {
 		}
 		let coord2 = match dir {
 			Direction::Up => Coord2D { x:coord.x, y:coord.y-1 },
-			Direction::Down => Coord2D { x:coord.x, y:coord.y-1 },
-			Direction::Left => Coord2D { x:coord.x, y:coord.y-1 },
-			Direction::Right => Coord2D { x:coord.x, y:coord.y-1 },
+			Direction::Down => Coord2D { x:coord.x, y:coord.y+1 },
+			Direction::Left => Coord2D { x:coord.x-1, y:coord.y },
+			Direction::Right => Coord2D { x:coord.x+1, y:coord.y },
 		};
 		return self.find_coord_index(coord2).is_none()
 	}
