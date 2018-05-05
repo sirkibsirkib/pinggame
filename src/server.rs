@@ -192,7 +192,9 @@ fn handle_client_incoming(clients: &mut Clients, tok: Token, server_control: &mu
 	let client_object = clients.get_mut(&tok).expect("clients incoming");
 	let moniker = client_object.moniker;
 	loop {
-		match client_object.middleman.recv::<Serverward>() {
+		let x = client_object.middleman.recv::<Serverward>();
+		println!("got from client {:?} {:?}", tok, &x);
+		match x {
 			Ok(Some(Serverward::ReqMove(dir))) => {
 				if game_state.move_moniker_in_dir(moniker, dir) {
 					outgoing_updates.push(Clientward::UpdMove(moniker, dir))
@@ -218,6 +220,7 @@ fn handle_newcomer_incoming(newcomers: &mut Newcomers, tok: Token, server_contro
 	let mut done = false; // drop all but first message
 	let mm: &mut Middleman = newcomers.get_mut(&tok).expect("newcomer incoming");
 	mm.recv_all_map( |_me, msg| {
+		println!("got from newcomer {:?} {:?}", tok, &msg);
 		if done { return }
 		if let Serverward::Hello(moniker) = msg {
 			server_control.push(UpgradeClient(tok, moniker));

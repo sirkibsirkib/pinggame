@@ -152,7 +152,7 @@ impl event::EventHandler for ClientState {
         use self::Clientward::*;
         let (gs, mm, tx_cache) = (&mut self.game_state, &mut self.mm, &mut self.text_cache); 
         mm.recv_all_map( |_me, msg| {
-        	// println!("got {:?} from server", &msg);
+        	println!("got {:?} from server", &msg);
             match msg {
                 Welcome(_) => panic!("Not expecting a welcome"),
                 AddPlayer(moniker, coord) => {
