@@ -61,6 +61,7 @@ pub fn server_enter(addr: &SocketAddr) {
     				// LISTENER ACCEPT
     				match listener.accept() {
 						Ok((stream, _addr)) => {
+							stream.set_nodelay(true).expect("set_nodelay call failed");
 							let mm = Middleman::new(stream);
 				    		let tok = next_free_token(&clients, &newcomers);
 							println!("Newcomer client with {:?}", tok);

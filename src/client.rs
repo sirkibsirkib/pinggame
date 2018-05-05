@@ -42,6 +42,7 @@ pub fn client_enter(addr: &SocketAddr, my_moniker: Moniker) {
 	println!("Client starting, for server at addr {:?}!", addr);
 	match StdStream::connect(addr) {
 		Ok(stream) => {
+			stream.set_nodelay(true).expect("set_nodelay call failed");
 			let mm = Middleman::new(MioStream::from_stream(stream).unwrap());
 			client_go(mm, my_moniker);
 		},
