@@ -55,7 +55,7 @@ pub fn server_enter(addr: &SocketAddr) {
     loop {
     	poll.poll(&mut events, Some(sleepy)).unwrap();
     	for event in events.iter() {
-    		println!("event {:?}", &event);
+    		// println!("event {:?}", &event);
     		match event.token() {
     			LISTENER_TOKEN => {
     				// LISTENER ACCEPT
@@ -80,11 +80,11 @@ pub fn server_enter(addr: &SocketAddr) {
     					continue;
     				}
     				if clients.contains_key(&tok) {
-    					println!("...client");
+    					// println!("...client");
     					handle_client_incoming(&mut clients, tok, &mut server_control,
     						                   &mut game_state, &mut outgoing_updates);
     				} else if newcomers.contains_key(&tok) {
-    					println!("...newcomer");
+    					// println!("...newcomer");
     					handle_newcomer_incoming(&mut newcomers, tok, &mut server_control);
     				} else {
     					panic!("WHOSE TOKEN??");
@@ -110,7 +110,7 @@ fn broadcast_outgoing_updates(outgoing_updates: &mut Vec<Clientward>, clients: &
 {
 	use self::ServerCtrlMsg::*;
 	for msg in outgoing_updates.drain(..) {
-		println!("broadcasting {:?}", &msg);
+		// println!("broadcasting {:?}", &msg);
 		let packed = PackedMessage::new(& msg).expect("failed to pack");
 		match msg {
 			Clientward::AddPlayer(moniker, _coord) => {
@@ -159,7 +159,7 @@ fn do_server_control(server_control: &mut Vec<ServerCtrlMsg>, newcomers: &mut Ne
 				}
 			},
 			ServerCtrlMsg::UpgradeClient(tok, moniker) => {
-				let mut mm = newcomers.remove(&tok).expect("remove ok");
+				let mut mm = newcomers.remove(&tok).expect("remove fail");
 				if game_state.contains_moniker(moniker) {
 					let _ = mm.send(& Clientward::ErrorTakenMoniker);
 				} else {
@@ -168,7 +168,7 @@ fn do_server_control(server_control: &mut Vec<ServerCtrlMsg>, newcomers: &mut Ne
 						if mm.send(& Clientward::Welcome(game_state.clone())).is_ok() {
 							poll.reregister(&mm, tok,
 						    			Ready::readable() | Ready::writable(),
-						    			PollOpt::edge()).expect("reregister ok");
+						    			PollOpt::edge()).expect("reregister fail");
 				    		let x = ClientObject {
 				    			moniker: moniker,
 				    			middleman: mm,

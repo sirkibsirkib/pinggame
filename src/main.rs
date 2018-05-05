@@ -52,7 +52,7 @@ fn main() {
 		match matches.value_of("moniker") {
 	    	Some(moniker) => {
 	    		if moniker.len() != 1 {
-	    			println!("You need to provide a 1-char moniker!");
+	    			println!("You need to provide a 1-char ascii moniker!");
 	    			return;
 	    		}
 	    		let my_moniker = Moniker(moniker.chars().next().unwrap());

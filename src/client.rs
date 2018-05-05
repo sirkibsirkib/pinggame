@@ -42,8 +42,6 @@ pub fn client_enter(addr: &SocketAddr, my_moniker: Moniker) {
 	println!("Client starting, for server at addr {:?}!", addr);
 	match StdStream::connect(addr) {
 		Ok(stream) => {
-			// TODO
-			println!("Connected ok!");
 			let mm = Middleman::new(MioStream::from_stream(stream).unwrap());
 			client_go(mm, my_moniker);
 		},
@@ -60,7 +58,7 @@ fn client_go(mut mm: Middleman, my_moniker: Moniker) {
     			Ready::readable(),
     			PollOpt::edge()).unwrap();
 
-	mm.send(& Serverward::Hello(my_moniker)).expect("first send OK");
+	mm.send(& Serverward::Hello(my_moniker)).expect("HELLO send fail");
 	use common::Clientward::*;
 	let game_state = match mm.recv_blocking_solo::<Clientward>(&poll, &mut events, None).expect("crash").unwrap() {
 		Welcome(state) => state,
@@ -69,7 +67,7 @@ fn client_go(mut mm: Middleman, my_moniker: Moniker) {
 			panic!("Server Hello went awry");
 		},
 	};
-	println!("Got game state {:?}", &game_state);
+	println!("Initial game state {:?}", &game_state);
 
 	let c = conf::Conf::new();
     let ctx = &mut Context::load_from_conf("super_simple", "ggez", c).unwrap();
@@ -149,7 +147,7 @@ impl event::EventHandler for ClientState {
         use self::Clientward::*;
         let (gs, mm, tx_cache) = (&mut self.game_state, &mut self.mm, &mut self.text_cache); 
         mm.recv_all_map( |_me, msg| {
-        	println!("got {:?} from server", &msg);
+        	// println!("got {:?} from server", &msg);
             match msg {
                 Welcome(_) => (),
                 AddPlayer(moniker, coord) => {
@@ -161,14 +159,12 @@ impl event::EventHandler for ClientState {
                     gs.try_remove_moniker(moniker);
                 },
                 UpdMove(moniker, dir) => {
-                    let worked = gs.move_moniker_in_dir(moniker, dir);
-                    println!("worked {:?}", worked);
+                    gs.move_moniker_in_dir(moniker, dir);
                 },
                 some_err => {
                     println!("Server sent err msg {:?}", some_err);
                 },
             };
-            println!("state {:?}", gs);
         }).1.expect("Failed to read from server!");
         Ok(())
     }
