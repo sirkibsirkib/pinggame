@@ -3,7 +3,7 @@ use rand::{
 	Rng,
 };
 
-#[derive(Copy, Clone, Eq, PartialEq, Serialize, Deserialize, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Serialize, Deserialize, Debug, Hash)]
 pub struct Moniker(pub char);
 
 pub type ValidMove = bool;
@@ -13,8 +13,8 @@ pub struct GameState {
 	monikers: Vec<(Coord2D, Moniker)>, 
 }
 impl GameState {
-	const WIDTH: u16 = 16;
-	const HEIGHT: u16 = 16;
+	pub const WIDTH: u16 = 30;
+	pub const HEIGHT: u16 = 22;
 
 	pub fn new() -> Self {
 		GameState {
@@ -23,7 +23,7 @@ impl GameState {
 	}
 
 	pub fn contains_moniker(&self, moniker: Moniker) -> bool {
-		self.find_moniker_index(moniker).is_none()
+		self.find_moniker_index(moniker).is_some()
 	}
 
 	pub fn random_free_spot(&self) -> Option<Coord2D> {
@@ -44,12 +44,19 @@ impl GameState {
 		}
 	}
 
+	pub fn try_remove_moniker(&mut self, moniker: Moniker) -> ValidMove {
+		if let Some(index) = self.find_moniker_index(moniker) {
+			self.monikers.remove(index);
+			true
+		} else { false }
+	}
+
 	pub fn try_put_moniker(&mut self, moniker: Moniker, coord: Coord2D) -> ValidMove {
-		if self.find_coord_index(coord).is_some() {
-			return false;
-		}
-		self.monikers.push((coord, moniker));
-		true
+		if self.find_coord_index(coord).is_none() {
+			self.monikers.push((coord, moniker));
+			true
+		} else { false }
+		
 	}
 
 	fn find_coord_index(&self, coord: Coord2D) -> Option<usize> {
@@ -72,8 +79,8 @@ impl GameState {
 
 	pub fn move_moniker_in_dir(&mut self, moniker: Moniker, dir: Direction) -> ValidMove {
 		if let Some(index) = self.find_moniker_index(moniker) {
-			let &mut (mut c, _p) = &mut self.monikers[index];
-			if !Self::can_move_at(c, dir) {
+			let &mut (ref mut c, _p) = &mut self.monikers[index];
+			if !Self::can_move_at(*c, dir) {
 				return false; // would move out of bounds
 			}
 			c.move_with(dir);
@@ -92,27 +99,23 @@ impl GameState {
 		}
 	}
 
-	pub fn draw(&self) {
-		println!("===================");
-		for y in 0..Self::HEIGHT {
-			for x in 0..Self::WIDTH {
-				let c = Coord2D::new(x, y);
-				if let Some(index) = self.find_coord_index(c) { //NAIVE solution for now
-					print!("{:?}", self.monikers[index].1);
-				} else {
-					print!(" ", );
-				}
-				
-			}
-			println!();
-		}
+	pub fn iter(&self) -> Wrapper {
+		Wrapper(self.monikers.iter())
 	}
 }
 
+pub struct Wrapper<'a>(::std::slice::Iter<'a, (Coord2D, Moniker)>);
+impl<'a> Iterator for Wrapper<'a> {
+    type Item = &'a (Coord2D, Moniker);
+    fn next(&mut self) -> Option<Self::Item> { self.0.next() }
+    fn size_hint(&self) -> (usize, Option<usize>) { self.0.size_hint() }
+}
+
+
 #[derive(Copy, Clone, Hash, Eq, PartialEq, Serialize, Deserialize, Debug)]
 pub struct Coord2D {
-	x: u16,
-	y: u16,	
+	pub x: u16,
+	pub y: u16,	
 }
 impl Coord2D {
 	#[inline]

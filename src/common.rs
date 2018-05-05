@@ -8,7 +8,7 @@ use super::mio;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Clientward {
-	Welcome(GameState, Moniker),
+	Welcome(GameState),
 	AddPlayer(Moniker, Coord2D),
 	RemovePlayer(Moniker),
 	UpdMove(Moniker, Direction),
