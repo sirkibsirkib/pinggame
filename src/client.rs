@@ -86,7 +86,7 @@ fn client_go(mut mm: Middleman, my_moniker: Moniker) {
         poll: poll,
         events: events,
         mesh: build_square_mesh(ctx).unwrap(),
-        poll_timeout: Some(Duration::from_millis(30)),
+        poll_timeout: Some(Duration::from_millis(0)),
         no_change: false,
         text_cache: text_cache,
     };
