@@ -4,7 +4,6 @@ use ::game::*;
 
 use middleman::{
 	Middleman,
-	Message,
 	PackedMessage,
 };
 
@@ -70,7 +69,10 @@ pub fn server_enter(addr: &SocketAddr) {
 						    			PollOpt::oneshot()).unwrap();
 				    		newcomers.insert(tok, mm);
 						},
-						Err(e) => panic!("DEAD BOI"), // TODO
+						Err(e) => {
+							println!("Listener died! {}", e);
+							panic!("Listener died");
+						},
 					}
     			},
     			tok => {
@@ -193,16 +195,14 @@ fn handle_client_incoming(clients: &mut Clients, tok: Token, server_control: &mu
 			Ok(Some(Serverward::ReqMove(dir))) => {
 				if game_state.move_moniker_in_dir(moniker, dir) {
 					outgoing_updates.push(Clientward::UpdMove(moniker, dir))
-				} else {
-					// do nothing.
-					// TODO discern between illegal and just incorrect
 				}
+				// don't drop clients if they misbehave. just silently drop msg
 			},
 			Ok(None) => break, // spurious wakeup
-			Ok(Some(msg)) => {
+			Ok(Some(_msg)) => {
 				server_control.push(DropClientWithErr(tok, Clientward::ErrorExpectedReq));
 			}
-			Err(e) => {
+			Err(_e) => {
 				server_control.push(DropClientWithErr(tok, Clientward::ErrorSocketDead));
 				break;
 			},

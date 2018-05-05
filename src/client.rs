@@ -1,4 +1,3 @@
-use ::common;
 use ::common::*;
 use ::game::*;
 
@@ -8,12 +7,7 @@ use std::{
 	collections::HashMap,
 };
 
-use middleman::{
-    Middleman,
-    Message,
-    PackedMessage,
-};
-
+use middleman::Middleman;
 
 use mio::{
     Poll,
@@ -37,7 +31,6 @@ use ggez::{
         self,
         Keycode,
         Mod,
-        EventHandler,
     },
 };
 
@@ -78,7 +71,6 @@ fn client_go(mut mm: Middleman, my_moniker: Moniker) {
 	};
 	println!("Got game state {:?}", &game_state);
 
-	// ggez
 	let c = conf::Conf::new();
     let ctx = &mut Context::load_from_conf("super_simple", "ggez", c).unwrap();
 
@@ -86,7 +78,6 @@ fn client_go(mut mm: Middleman, my_moniker: Moniker) {
     let mut cs = ClientState {
         game_state: game_state,
         mm: mm,
-        my_moniker: my_moniker,
         screen_dims: [w, h],
         poll: poll,
         events: events,
@@ -131,7 +122,6 @@ struct ClientState {
 	screen_dims: [u32; 2],
     game_state: GameState,
     mm: Middleman,
-    my_moniker: Moniker,
     poll: Poll,
     events: Events,
     mesh: Mesh,
@@ -150,15 +140,15 @@ impl ClientState {
 
 impl event::EventHandler for ClientState {
     fn update(&mut self, ctx: &mut Context) -> GameResult<()> {
-        self.poll.poll(&mut self.events, self.poll_timeout);
+        self.poll.poll(&mut self.events, self.poll_timeout).expect("poll failed");
         if self.events.is_empty() {
             return Ok(());
         }
         self.no_change = false;
         self.events.clear();
-        use Clientward::*;
+        use self::Clientward::*;
         let (gs, mm, tx_cache) = (&mut self.game_state, &mut self.mm, &mut self.text_cache); 
-        mm.recv_all_map( |me: &mut Middleman, msg| {
+        mm.recv_all_map( |_me, msg| {
         	println!("got {:?} from server", &msg);
             match msg {
                 Welcome(_) => (),

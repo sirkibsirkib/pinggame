@@ -8,41 +8,31 @@ extern crate clap;
 extern crate rand;
 extern crate ggez;
 
-
 use clap::App;
-use middleman::{
-	Middleman,
-	Message,
-	PackedMessage,
-};
-
 use std::{
 	net::SocketAddr,
 };
 
 mod game;
-use game::*;
+use game::Moniker;
 
 mod common;
-use common::*;
-
-
 mod server;
 mod client;
 
-fn debug_testing() {
-	let addr: SocketAddr = "127.0.0.1:8008".parse().unwrap();
-	let addr2 = addr.clone();
-	std::thread::spawn(move || {
-		server::server_enter(&addr2);
-	});
-	std::thread::sleep(std::time::Duration::from_millis(800));
-	client::client_enter(&addr, Moniker('q'));
-}
+// fn debug_testing() {
+// 	let addr: SocketAddr = "127.0.0.1:8008".parse().unwrap();
+// 	let addr2 = addr.clone();
+// 	std::thread::spawn(move || {
+// 		server::server_enter(&addr2);
+// 	});
+// 	std::thread::sleep(std::time::Duration::from_millis(800));
+// 	client::client_enter(&addr, Moniker('q'));
+// }
 
 fn main() {
-	debug_testing();
-	return;
+	// debug_testing();
+	// return;
 	let matches = App::new("Pinggame")
 	        .version("1.0")
 	        .author("C. Esterhuyse <christopher.esterhuyse@gmail.com>")
