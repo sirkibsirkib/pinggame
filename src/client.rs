@@ -72,6 +72,11 @@ fn client_go(mut mm: Middleman, my_moniker: Moniker) {
 	let c = conf::Conf::new();
     let ctx = &mut Context::load_from_conf("super_simple", "ggez", c).unwrap();
 
+    let mut text_cache = HashMap::new();
+    for &(_, moniker) in game_state.iter() {
+    	insert_into_cache(ctx, &mut text_cache, moniker);
+    }
+    insert_into_cache(ctx, &mut text_cache, my_moniker);
     let (w, h) = graphics::get_size(ctx);
     let mut cs = ClientState {
         game_state: game_state,
@@ -82,12 +87,8 @@ fn client_go(mut mm: Middleman, my_moniker: Moniker) {
         mesh: build_square_mesh(ctx).unwrap(),
         poll_timeout: Some(Duration::from_millis(30)),
         no_change: false,
-        text_cache: HashMap::new(),
+        text_cache: text_cache,
     };
-    for &(_, moniker) in game_state.iter() {
-    	insert_into_cache(ctx, &mut cs.text_cache, moniker);
-    }
-    insert_into_cache(ctx, &mut cs.text_cache, my_moniker);
     event::run(ctx, &mut cs).unwrap();
 }
 
