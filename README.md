@@ -1,6 +1,6 @@
 # Pinggame
 
-This is a little "game" I made for testing ping for a stateful game like this. It's hardly a game, but its quite extensible, and I have some helper libs planned to simplify it even further (particularly server-side).
+This is a little "game" I made for testing the RTT and other such things for a game built in Rust on top of the libraries `middleman`, `ggez` and `mio` for a stateful multiplayer. It's not fun at all, to be honest, but that's not the point.
 
 ## Setup
 1. Ensure you have the stable branch of [rust](https://www.rust-lang.org/) installed. Use [rustup](https://rustup.rs) to install the latest 'stable' toolchain.
