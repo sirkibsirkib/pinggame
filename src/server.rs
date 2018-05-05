@@ -202,6 +202,7 @@ fn handle_client_incoming(clients: &mut Clients, tok: Token, server_control: &mu
 			Ok(None) => break, // spurious wakeup
 			Ok(Some(_msg)) => {
 				server_control.push(DropClientWithErr(tok, Clientward::ErrorExpectedReq));
+				break;
 			}
 			Err(_e) => {
 				server_control.push(DropClientWithErr(tok, Clientward::ErrorSocketDead));
