@@ -33,7 +33,7 @@ If you want to be the server, run:
 the first argument is your ip and port number. This is where the clients will find you. If you want to be discoverable beyond your local network, look into 'public IP' and 'port forwarding'.
 
 ### Client mode
-If you want to be the server, run:
+If you want to be a client (player), run:
 ```
 ./pinggame "127.0.0.1:9000" -m "Q"
 ```
