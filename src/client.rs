@@ -62,7 +62,7 @@ fn client_go(mut mm: Middleman, my_moniker: Moniker) {
 	mm.send(& Serverward::Hello(my_moniker)).expect("HELLO send fail");
 	use common::Clientward::*;
 	let game_state = match mm.recv_blocking_solo::<Clientward>(&poll, &mut events, None).expect("crash").unwrap() {
-		Welcome(state) => state,
+		Welcome(essence) => GameState::from_essence(essence),
 		msg => {
 			println!("Got unexpected server msg {:?}", msg);
 			panic!("Server Hello went awry");
@@ -74,7 +74,7 @@ fn client_go(mut mm: Middleman, my_moniker: Moniker) {
     let ctx = &mut Context::load_from_conf("super_simple", "ggez", c).unwrap();
 
     let mut text_cache = HashMap::new();
-    for &(_, moniker) in game_state.iter() {
+    for &(_, moniker) in game_state.moniker_iter() {
     	insert_into_cache(ctx, &mut text_cache, moniker);
     }
     insert_into_cache(ctx, &mut text_cache, my_moniker);
@@ -207,7 +207,7 @@ impl event::EventHandler for ClientState {
     		return Ok(());
     	}
         graphics::clear(ctx);
-    	for &(coord, moniker) in self.game_state.iter() {
+    	for &(coord, moniker) in self.game_state.moniker_iter() {
     		let moniker_text = self.text_cache.get(&moniker).unwrap();
     		let screen_point = self.translate(coord);
     		let param = graphics::DrawParam {
@@ -217,6 +217,14 @@ impl event::EventHandler for ClientState {
     		graphics::draw_ex(ctx, &self.mesh, param)?;
         	graphics::set_color(ctx, (0, 0, 0).into())?;
     		graphics::draw_ex(ctx, moniker_text, param)?;
+    	}
+    	graphics::set_color(ctx, (40, 0, 0).into())?;
+    	for coord in self.game_state.wall_iter() {
+    		let screen_point = self.translate(coord);
+    		let param = graphics::DrawParam {
+    			dest: screen_point, .. Default::default()
+    		};
+    		graphics::draw_ex(ctx, &self.mesh, param)?;
     	}
         graphics::present(ctx);
         self.no_change = true;

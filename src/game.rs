@@ -1,33 +1,80 @@
 use rand::{
 	thread_rng,
 	Rng,
+	SeedableRng,
+	XorShiftRng,
 };
+use bitset::BitSet;
+use std::fmt;
 
 #[derive(Copy, Clone, Eq, PartialEq, Serialize, Deserialize, Debug, Hash)]
 pub struct Moniker(pub char);
 
 pub type ValidMove = bool;
+type GameStateSeed = [u32; 4];
 
-#[derive(Clone, Eq, PartialEq, Serialize, Deserialize, Debug)]
-pub struct GameState {
-	monikers: Vec<(Coord2D, Moniker)>, 
+fn new_random_seed() -> GameStateSeed {
+	thread_rng().gen()
 }
+
+
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct GameStateEssence {
+	monikers: Vec<(Coord2D, Moniker)>, 
+	rand_seed: GameStateSeed,
+}
+pub struct GameState {
+	essence: GameStateEssence,
+	walls: Vec<BitSet>,
+}
+
+impl fmt::Debug for GameState {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "GameState with essence {:?}", &self.essence)
+    }
+}
+
 impl GameState {
 	pub const WIDTH: u16 = 30;
 	pub const HEIGHT: u16 = 22;
 
-	pub fn new() -> Self {
+	pub fn new_random() -> Self {
+		let essence = GameStateEssence {
+			monikers: vec![], 
+			rand_seed: new_random_seed(),
+		};
+		Self::from_essence(essence)
+	}
+
+	pub fn from_essence(essence: GameStateEssence) -> Self {
+		let mut rng: XorShiftRng = SeedableRng::from_seed(essence.rand_seed);
+		let mut walls = vec![];
+		for _y in 0..Self::HEIGHT {
+			let mut row = BitSet::with_capacity(Self::WIDTH as usize);
+			for x in 0..Self::WIDTH {
+				if rng.gen_weighted_bool(3) {
+					row.set(x as usize, true);
+				}
+			}
+			walls.push(row);
+		}
 		GameState {
-			monikers: vec![],
+			essence: essence,
+			walls: walls,
 		}
 	}
 
+	pub fn get_essence(& self) -> &GameStateEssence {
+		& self.essence
+	}
+
 	pub fn contains_moniker(&self, moniker: Moniker) -> bool {
-		self.find_moniker_index(moniker).is_some()
+		self.index_of_moniker(moniker).is_some()
 	}
 
 	pub fn random_free_spot(&self) -> Option<Coord2D> {
-		if self.monikers.len()/2 >= (Self::WIDTH * Self::HEIGHT) as usize {
+		if self.essence.monikers.len()/2 >= (Self::WIDTH * Self::HEIGHT) as usize {
 			return None
 			// TODO linear probing or something better. Fine for now
 		}
@@ -38,29 +85,29 @@ impl GameState {
 				rng.gen_range(0, Self::WIDTH),
 				rng.gen_range(0, Self::HEIGHT),
 			);
-			if self.find_coord_index(coord).is_none() {
+			if self.index_of_moniker_by_coord(coord).is_none() {
 				return Some(coord);
 			}
 		}
 	}
 
 	pub fn try_remove_moniker(&mut self, moniker: Moniker) -> ValidMove {
-		if let Some(index) = self.find_moniker_index(moniker) {
-			self.monikers.remove(index);
+		if let Some(index) = self.index_of_moniker(moniker) {
+			self.essence.monikers.remove(index);
 			true
 		} else { false }
 	}
 
 	pub fn try_put_moniker(&mut self, moniker: Moniker, coord: Coord2D) -> ValidMove {
-		if self.find_coord_index(coord).is_none() {
-			self.monikers.push((coord, moniker));
+		if self.index_of_moniker_by_coord(coord).is_none() {
+			self.essence.monikers.push((coord, moniker));
 			true
 		} else { false }
 		
 	}
 
-	fn find_coord_index(&self, coord: Coord2D) -> Option<usize> {
-		for (i, &(c, _m)) in self.monikers.iter().enumerate() {
+	fn index_of_moniker_by_coord(&self, coord: Coord2D) -> Option<usize> {
+		for (i, &(c, _m)) in self.essence.monikers.iter().enumerate() {
 			if c == coord {
 				return Some(i)
 			}
@@ -68,8 +115,8 @@ impl GameState {
 		None
 	}
 
-	fn find_moniker_index(&self, moniker: Moniker) -> Option<usize> {
-		for (i, &(_c, m)) in self.monikers.iter().enumerate() {
+	fn index_of_moniker(&self, moniker: Moniker) -> Option<usize> {
+		for (i, &(_c, m)) in self.essence.monikers.iter().enumerate() {
 			if m == moniker {
 				return Some(i)
 			}
@@ -79,15 +126,15 @@ impl GameState {
 
 	pub fn move_moniker_in_dir(&mut self, moniker: Moniker, dir: Direction) -> ValidMove {
 		let current_pos;
-		if let Some(index) = self.find_moniker_index(moniker) {
-			let &mut (c, _p) = &mut self.monikers[index];
+		if let Some(index) = self.index_of_moniker(moniker) {
+			let &mut (c, _p) = &mut self.essence.monikers[index];
 			current_pos = c;
 		} else {
 			return false // no such moniker
 		};
 		if self.can_move_at(current_pos, dir) {
-			let index = self.find_moniker_index(moniker).unwrap();
-			let &mut (ref mut c, _p) = &mut self.monikers[index];
+			let index = self.index_of_moniker(moniker).unwrap();
+			let &mut (ref mut c, _p) = &mut self.essence.monikers[index];
 			c.move_with(dir);
 			true
 		} else {
@@ -110,19 +157,59 @@ impl GameState {
 			Direction::Left => Coord2D { x:coord.x-1, y:coord.y },
 			Direction::Right => Coord2D { x:coord.x+1, y:coord.y },
 		};
-		return self.find_coord_index(coord2).is_none()
+		return !self.is_wall_at(coord2)
+		&& self.index_of_moniker_by_coord(coord2).is_none() // no moniker there
 	}
 
-	pub fn iter(&self) -> Wrapper {
-		Wrapper(self.monikers.iter())
+	#[inline]
+	fn is_wall_at(&self, coord: Coord2D) -> bool {
+		self.walls[coord.y as usize]
+		.test(coord.x as usize)
+	}
+
+	pub fn moniker_iter(&self) -> MonikerIter {
+		MonikerIter(self.essence.monikers.iter())
+	}
+	pub fn wall_iter(&self) -> WallIter {
+		WallIter {
+			bit_grid: &self.walls,
+			next: Coord2D::new(0, 0),
+		}
 	}
 }
 
-pub struct Wrapper<'a>(::std::slice::Iter<'a, (Coord2D, Moniker)>);
-impl<'a> Iterator for Wrapper<'a> {
+pub struct MonikerIter<'a>(::std::slice::Iter<'a, (Coord2D, Moniker)>);
+impl<'a> Iterator for MonikerIter<'a> {
     type Item = &'a (Coord2D, Moniker);
     fn next(&mut self) -> Option<Self::Item> { self.0.next() }
     fn size_hint(&self) -> (usize, Option<usize>) { self.0.size_hint() }
+}
+
+pub struct WallIter<'a> {
+	bit_grid: &'a [BitSet],
+	next: Coord2D,
+}
+impl<'a> Iterator for WallIter<'a> {
+    type Item = Coord2D;
+    fn next(&mut self) -> Option<Self::Item> {
+    	loop {
+    		if self.next.x >= GameState::WIDTH {
+    			self.next.x = 0;
+    			self.next.y += 1;
+    			if self.next.y >= GameState::HEIGHT {
+    				return None;
+    			}
+    		}
+    		let was = self.next;
+    		self.next = Coord2D::new(was.x+1, was.y);
+    		if self.bit_grid[was.y as usize].test(was.x as usize) {
+    			return Some(was);
+    		}
+    	}
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+    	(0, None)
+    }
 }
 
 

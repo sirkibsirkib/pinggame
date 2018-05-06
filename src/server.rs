@@ -49,7 +49,7 @@ pub fn server_enter(addr: &SocketAddr) {
     let mut clients: Clients = HashMap::new();
 	let mut newcomers: HashMap<Token, Middleman> = HashMap::new();
 	let mut server_control: Vec<ServerCtrlMsg> = vec![];
-	let mut game_state = GameState::new();
+	let mut game_state = GameState::new_random();
 	let mut outgoing_updates = vec![];
 	let sleepy = ::std::time::Duration::from_millis(1000);
     loop {
@@ -166,7 +166,7 @@ fn do_server_control(server_control: &mut Vec<ServerCtrlMsg>, newcomers: &mut Ne
 				} else {
 					let coord = game_state.random_free_spot().expect("GAME TOO FULL");
 					if game_state.try_put_moniker(moniker, coord) {
-						if mm.send(& Clientward::Welcome(game_state.clone())).is_ok() {
+						if mm.send(& Clientward::Welcome(game_state.get_essence().clone())).is_ok() {
 							poll.reregister(&mm, tok,
 						    			Ready::readable() | Ready::writable(),
 						    			PollOpt::edge()).expect("reregister fail");

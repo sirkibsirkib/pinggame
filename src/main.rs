@@ -7,6 +7,7 @@ extern crate middleman;
 extern crate clap;
 extern crate rand;
 extern crate ggez;
+extern crate bitset;
 
 use clap::App;
 use std::{
