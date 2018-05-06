@@ -225,7 +225,8 @@ impl event::EventHandler for ClientState {
     		graphics::draw_ex(ctx, moniker_text, param)?;
     	}
     	graphics::set_color(ctx, (40, 0, 0).into())?;
-    	for coord in self.game_state.wall_iter() {
+    	for coord in self.game_state.coord_iter()
+    	.filter(|coord| self.game_state.is_wall_at(coord)) {
     		let screen_point = self.translate(coord);
     		let param = graphics::DrawParam {
     			dest: screen_point, .. Default::default()

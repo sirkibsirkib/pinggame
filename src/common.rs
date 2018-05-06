@@ -9,6 +9,10 @@ use super::mio;
 /////////////////////////////////////////////////////////////
 
 pub const MOVE_PERIOD: Duration = Duration::from_millis(130);
+pub const BOT_MOVE_PERIOD: Duration = Duration::from_millis(400);
+pub const DIR_CHOICES: [Direction; 4] = [
+	Direction::Up, Direction::Down, Direction::Left, Direction::Right
+];
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Clientward {

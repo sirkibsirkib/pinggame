@@ -20,7 +20,10 @@ fn new_random_seed() -> GameStateSeed {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct GameStateEssence {
 	monikers: Vec<(Coord2D, Moniker)>, 
+	non_wall_spaces: usize,
 	rand_seed: GameStateSeed,
+	wall_adds: Vec<Coord2D>,
+	wall_subs: Vec<Coord2D>,
 }
 pub struct GameState {
 	essence: GameStateEssence,
@@ -41,6 +44,8 @@ impl GameState {
 		let essence = GameStateEssence {
 			monikers: vec![], 
 			rand_seed: new_random_seed(),
+			wall_adds: vec![],
+			wall_subs: vec![],
 		};
 		Self::from_essence(essence)
 	}
@@ -48,11 +53,13 @@ impl GameState {
 	pub fn from_essence(essence: GameStateEssence) -> Self {
 		let mut rng: XorShiftRng = SeedableRng::from_seed(essence.rand_seed);
 		let mut walls = vec![];
+		let mut wall_count = 0;
 		for _y in 0..Self::HEIGHT {
 			let mut row = BitSet::with_capacity(Self::WIDTH as usize);
 			for x in 0..Self::WIDTH {
 				if rng.gen_weighted_bool(3) {
 					row.set(x as usize, true);
+					wall_count += 1;
 				}
 			}
 			walls.push(row);
@@ -60,6 +67,7 @@ impl GameState {
 		GameState {
 			essence: essence,
 			walls: walls,
+			non_wall_spaces: Self::WIDTH*Self::HEIGHT - wall_count,
 		}
 	}
 
@@ -71,7 +79,49 @@ impl GameState {
 		self.index_of_moniker(moniker).is_some()
 	}
 
+	pub fn num_monikers(&self) -> usize {
+		self.essence.monikers.len()
+	}
+
+	pub fn empty_cell_ratio(&self) -> f32 {
+		let population = self.num_monikers();
+		let spaces_left = self.non_wall_spaces - population;
+		let total_spaces = Self::WIDTH*Self::HEIGHT;
+		total_spaces as f32 / spaces_left as f32
+	}
+
 	pub fn random_free_spot(&self) -> Option<Coord2D> {
+		let spaces_left = self.non_wall_spaces - population;
+		match self.empty_cell_ratio() {
+			x if x > 0.96 => None,
+			x if x > 0.7 => { //linear probe
+				let mut rng = thread_rng();
+				let mut coord = Coord2D::new(
+					rng.gen_range(0, Self::WIDTH),
+					rng.gen_range(0, Self::HEIGHT),
+				);
+				for coord in self.coord_iter
+			},
+			_ => { // trial and error
+				let mut rng = thread_rng();
+				let mut coord;
+				loop {
+					coord = Coord2D::new(
+						rng.gen_range(0, Self::WIDTH),
+						rng.gen_range(0, Self::HEIGHT),
+					);
+					if self.is_wall_at(coord) { continue; }
+					if self.index_of_moniker_by_coord(coord).is_none() {
+						return Some(coord);
+					}
+				}
+			}
+		}
+		if ratio > 0.95 {
+			return None; // We're basically full up
+		}
+		let population = self.num_monikers();
+		let spaces_left = self.non_wall_spaces - population;
 		if self.essence.monikers.len()/2 >= (Self::WIDTH * Self::HEIGHT) as usize {
 			return None
 			// TODO linear probing or something better. Fine for now
@@ -83,6 +133,9 @@ impl GameState {
 				rng.gen_range(0, Self::WIDTH),
 				rng.gen_range(0, Self::HEIGHT),
 			);
+			if self.is_wall_at(coord) {
+				continue;
+			}
 			if self.index_of_moniker_by_coord(coord).is_none() {
 				return Some(coord);
 			}
@@ -160,7 +213,7 @@ impl GameState {
 	}
 
 	#[inline]
-	fn is_wall_at(&self, coord: Coord2D) -> bool {
+	pub fn is_wall_at(&self, coord: Coord2D) -> bool {
 		self.walls[coord.y as usize]
 		.test(coord.x as usize)
 	}
@@ -168,11 +221,16 @@ impl GameState {
 	pub fn moniker_iter(&self) -> MonikerIter {
 		MonikerIter(self.essence.monikers.iter())
 	}
-	pub fn wall_iter(&self) -> WallIter {
-		WallIter {
-			bit_grid: &self.walls,
-			next: Coord2D::new(0, 0),
-		}
+	// WAITING FOR IMPL TRAIT
+	
+	// pub fn wall_iter(&self) -> WallIter {
+	// 	WallIter {
+	// 		bit_grid: &self.walls,
+	// 		next: Coord2D::new(0, 0),
+	// 	}
+	// }
+	pub fn coord_iter(&self) -> CoordIter {
+		CoordIter { next: Coord2D::NULL }
 	}
 }
 
@@ -183,33 +241,54 @@ impl<'a> Iterator for MonikerIter<'a> {
     fn size_hint(&self) -> (usize, Option<usize>) { self.0.size_hint() }
 }
 
-pub struct WallIter<'a> {
-	bit_grid: &'a [BitSet],
+// pub struct WallIter<'a> {
+// 	bit_grid: &'a [BitSet],
+// 	next: Coord2D,
+// }
+// impl<'a> Iterator for WallIter<'a> {
+//     type Item = Coord2D;
+//     fn next(&mut self) -> Option<Self::Item> {
+//     	loop {
+//     		if self.next.x >= GameState::WIDTH {
+//     			self.next.x = 0;
+//     			self.next.y += 1;
+//     			if self.next.y >= GameState::HEIGHT {
+//     				return None;
+//     			}
+//     		}
+//     		let was = self.next;
+//     		self.next = Coord2D::new(was.x+1, was.y);
+//     		if self.bit_grid[was.y as usize].test(was.x as usize) {
+//     			return Some(was);
+//     		}
+//     	}
+//     }
+//     fn size_hint(&self) -> (usize, Option<usize>) {
+//     	(0, None)
+//     }
+// }
+pub struct CoordIter<'a> {
 	next: Coord2D,
 }
-impl<'a> Iterator for WallIter<'a> {
+impl<'a> Iterator for CoordIter<'a> {
     type Item = Coord2D;
-    fn next(&mut self) -> Option<Self::Item> {
-    	loop {
-    		if self.next.x >= GameState::WIDTH {
-    			self.next.x = 0;
-    			self.next.y += 1;
-    			if self.next.y >= GameState::HEIGHT {
-    				return None;
-    			}
-    		}
-    		let was = self.next;
-    		self.next = Coord2D::new(was.x+1, was.y);
-    		if self.bit_grid[was.y as usize].test(was.x as usize) {
-    			return Some(was);
-    		}
-    	}
+fn next(&mut self) -> Option<Self::Item> {
+		if self.next.x >= GameState::WIDTH {
+			self.next.x = 0;
+			self.next.y += 1;
+			if self.next.y >= GameState::HEIGHT {
+				return None;
+			}
+		}
+		let was = self.next;
+		self.next = Coord2D::new(was.x+1, was.y);
+		was
     }
     fn size_hint(&self) -> (usize, Option<usize>) {
-    	(0, None)
+    	let x = GameState::WIDTH * GameState::HEIGHT;
+    	(x, Some(x))
     }
 }
-
 
 #[derive(Copy, Clone, Hash, Eq, PartialEq, Serialize, Deserialize, Debug)]
 pub struct Coord2D {
@@ -217,6 +296,8 @@ pub struct Coord2D {
 	pub y: u16,	
 }
 impl Coord2D {
+	pub const NULL: Coord2D = Coord2D { x:0, y:0 }; 
+
 	#[inline]
 	pub fn new(x: u16, y: u16) -> Self {
 		Coord2D { x:x, y:y }

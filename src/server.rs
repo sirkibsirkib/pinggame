@@ -2,6 +2,10 @@
 use ::common::*;
 use ::game::*;
 
+use ::rand::{self,
+	Rng,
+};
+
 use middleman::{
 	Middleman,
 	PackedMessage,
@@ -10,7 +14,10 @@ use middleman::{
 use std::{
 	net::SocketAddr,
 	collections::HashMap,
-	time::Instant,
+	time::{
+		Duration,
+		Instant,
+	},
 };
 use mio::{
 	Poll,
@@ -21,6 +28,7 @@ use mio::{
 };
 
 const LISTENER_TOKEN: Token = Token(0);
+const SERVER_SLEEP_TIME: Duration = Duration::from_millis(200);
 
 type Clients = HashMap<Token, ClientObject>;
 type Newcomers = HashMap<Token, Middleman>;
@@ -51,12 +59,13 @@ pub fn server_enter(addr: &SocketAddr) {
 	let mut newcomers: HashMap<Token, Middleman> = HashMap::new();
 	let mut server_control: Vec<ServerCtrlMsg> = vec![];
 	let mut game_state = GameState::new_random();
+	let mut bots = init_bots(&mut game_state);
+
 	let mut outgoing_updates = vec![];
-	let sleepy = ::std::time::Duration::from_millis(1000);
     loop {
-    	poll.poll(&mut events, Some(sleepy)).unwrap();
+    	let poll_sleep = if clients.is_empty() { None } else { Some(SERVER_SLEEP_TIME) };
+    	poll.poll(&mut events, poll_sleep).unwrap();
     	for event in events.iter() {
-    		// println!("event {:?}", &event);
     		match event.token() {
     			LISTENER_TOKEN => {
     				// LISTENER ACCEPT
@@ -93,6 +102,11 @@ pub fn server_enter(addr: &SocketAddr) {
     				}
     			},
     		}
+    	}
+
+    	if !clients.is_empty() {
+    		// freeze the game when there are no clients
+    		game_tick(&mut game_state, &mut outgoing_updates, &mut bots);
     	}
 
     	if !outgoing_updates.is_empty() {
@@ -134,6 +148,42 @@ fn broadcast_outgoing_updates(outgoing_updates: &mut Vec<Clientward>, clients: &
 			},
 		} 
 		
+	}
+}
+
+struct Bot {
+	moniker: Moniker,
+	last_move_at: Instant,
+}
+
+fn init_bots(game_state: &mut GameState) -> Vec<Bot> {
+	let mut bots = vec![];
+	for bot_moniker in ['0', '1']
+	.iter().map(|&c| Moniker(c))
+	{
+		let coord = game_state.random_free_spot().expect("No coord to put bot");
+		if game_state.try_put_moniker(bot_moniker, coord) {
+			bots.push(Bot { moniker: bot_moniker, last_move_at: Instant::now() });
+		} else {
+			panic!("Failed to place bot {:?}", bot_moniker);
+		}
+	}
+	bots
+}
+
+fn game_tick(game_state: &mut GameState, outgoing_updates: &mut Vec<Clientward>,
+	         bots: &mut Vec<Bot>)
+{
+	let mut rng = rand::thread_rng();
+	for bot in bots.iter_mut() {
+		if bot.last_move_at.elapsed() > BOT_MOVE_PERIOD {
+			let moniker = bot.moniker;
+			let dir = *rng.choose(&DIR_CHOICES).unwrap();
+			if game_state.move_moniker_in_dir(moniker, dir) {
+				bot.last_move_at = Instant::now();
+				outgoing_updates.push(Clientward::UpdMove(moniker, dir))
+			}
+		}
 	}
 }
 
