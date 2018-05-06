@@ -1,10 +1,14 @@
 
 use ::game::*;
 use ::middleman;
-use ::std;
+use ::std::{self,
+	time::Duration,
+};
 use super::mio;
 
 /////////////////////////////////////////////////////////////
+
+pub const MOVE_PERIOD: Duration = Duration::from_millis(130);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Clientward {

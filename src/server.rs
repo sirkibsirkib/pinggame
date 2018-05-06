@@ -10,6 +10,7 @@ use middleman::{
 use std::{
 	net::SocketAddr,
 	collections::HashMap,
+	time::Instant,
 };
 use mio::{
 	Poll,
@@ -18,7 +19,6 @@ use mio::{
 	Events,
 	Token,
 };
-
 
 const LISTENER_TOKEN: Token = Token(0);
 
@@ -29,6 +29,7 @@ type Newcomers = HashMap<Token, Middleman>;
 struct ClientObject {
 	middleman: Middleman,
 	moniker: Moniker,
+	last_move_at: Instant,
 }
 
 #[derive(Clone, Debug)]
@@ -173,6 +174,7 @@ fn do_server_control(server_control: &mut Vec<ServerCtrlMsg>, newcomers: &mut Ne
 				    		let x = ClientObject {
 				    			moniker: moniker,
 				    			middleman: mm,
+				    			last_move_at: Instant::now(),
 				    		};
 				    		clients.insert(tok, x);
 				    		outgoing_updates.push(Clientward::AddPlayer(moniker, coord));
@@ -196,7 +198,12 @@ fn handle_client_incoming(clients: &mut Clients, tok: Token, server_control: &mu
 		println!("got from client {:?} {:?}", tok, &x);
 		match x {
 			Ok(Some(Serverward::ReqMove(dir))) => {
+				if client_object.last_move_at.elapsed() < MOVE_PERIOD {
+					println!("tok {:?} is moving too fast", tok);
+					continue; //moving too fast
+				} 
 				if game_state.move_moniker_in_dir(moniker, dir) {
+					client_object.last_move_at = Instant::now();
 					outgoing_updates.push(Clientward::UpdMove(moniker, dir))
 				}
 				// don't drop clients if they misbehave. just silently drop msg

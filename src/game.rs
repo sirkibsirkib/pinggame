@@ -17,8 +17,6 @@ fn new_random_seed() -> GameStateSeed {
 	thread_rng().gen()
 }
 
-
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct GameStateEssence {
 	monikers: Vec<(Coord2D, Moniker)>, 

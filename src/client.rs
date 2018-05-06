@@ -3,7 +3,10 @@ use ::game::*;
 
 use std::{
 	net::SocketAddr,
-	time::Duration,
+	time::{
+		Instant,
+		Duration,
+	},
 	collections::HashMap,
 };
 
@@ -89,6 +92,7 @@ fn client_go(mut mm: Middleman, my_moniker: Moniker) {
         poll_timeout: Some(Duration::from_millis(0)),
         no_change: false,
         text_cache: text_cache,
+        last_move_at: Instant::now(),
     };
     event::run(ctx, &mut cs).unwrap();
 }
@@ -131,6 +135,7 @@ struct ClientState {
     poll_timeout: Option<Duration>,
     no_change: bool,
     text_cache: TextCache,
+    last_move_at: Instant,
 }
 impl ClientState {
 	fn translate(&self, coord: Coord2D) -> Point2 {
@@ -176,27 +181,28 @@ impl event::EventHandler for ClientState {
     }
 
     fn key_down_event(&mut self, ctx: &mut Context, keycode: Keycode, _keymod: Mod, _repeat: bool) {
+    	let mut mv = |dir| {
+    		if self.last_move_at.elapsed() < MOVE_PERIOD {
+    			println!("I'm moving too fast!");
+    			return;
+    		}
+    		self.last_move_at = Instant::now();
+			self.mm.send(& Serverward::ReqMove(dir))
+            .expect("req fail")
+    	};
         match keycode {
         	Keycode::A |
-            Keycode::Left => {
-                self.mm.send(& Serverward::ReqMove(Direction::Left))
-                .expect("req fail")
-            },
+            Keycode::Left => mv(Direction::Left),
+
         	Keycode::D |
-            Keycode::Right => {
-                self.mm.send(& Serverward::ReqMove(Direction::Right))
-                .expect("req fail")
-            },
+            Keycode::Right => mv(Direction::Right),
+            
         	Keycode::W |
-            Keycode::Up => {
-                self.mm.send(& Serverward::ReqMove(Direction::Up))
-                .expect("req fail")
-            },
+            Keycode::Up => mv(Direction::Up),
+            
         	Keycode::S |
-            Keycode::Down => {
-                self.mm.send(& Serverward::ReqMove(Direction::Down))
-                .expect("req fail")
-            },
+            Keycode::Down => mv(Direction::Down),
+            
             Keycode::Escape => ctx.quit().unwrap(),
             _ => (),
         }
