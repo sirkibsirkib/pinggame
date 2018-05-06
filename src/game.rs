@@ -5,7 +5,11 @@ use rand::{
 	XorShiftRng,
 };
 use bitset::BitSet;
-use std::fmt;
+use std::{
+	fmt,
+	collections::HashMap,
+};
+
 
 #[derive(Copy, Clone, Eq, PartialEq, Serialize, Deserialize, Debug, Hash)]
 pub struct Moniker(pub char);
@@ -17,17 +21,22 @@ fn new_random_seed() -> GameStateSeed {
 	thread_rng().gen()
 }
 
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct GameStateEssence {
-	monikers: Vec<(Coord2D, Moniker)>, 
-	non_wall_spaces: usize,
-	rand_seed: GameStateSeed,
-	wall_adds: Vec<Coord2D>,
-	wall_subs: Vec<Coord2D>,
+pub struct PlayerObject {
+	coord: Coord2D,
+	charge: u16,
 }
-pub struct GameState {
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct GameStateEssence { //everything that CANNOT be generated
+	players: HashMap<Moniker, PlayerObject>, 
+	rand_seed: GameStateSeed,
+	wall_override: HashMap<Coord2D, bool>,
+}
+pub struct GameState { //all but `essence` can be generated from `essence`
 	essence: GameStateEssence,
-	walls: Vec<BitSet>,
+	wall_default: Vec<BitSet>,
+	non_wall_spaces: usize,
 }
 
 impl fmt::Debug for GameState {
@@ -36,71 +45,145 @@ impl fmt::Debug for GameState {
     }
 }
 
-impl GameState {
+
+impl GameState { // basic stuff
 	pub const WIDTH: u16 = 30;
 	pub const HEIGHT: u16 = 22;
+	pub const TOTAL_COORDS: usize =
+		Self::WIDTH as usize * Self::HEIGHT as usize;
+
+	#[inline]
+	pub fn get_essence(& self) -> &GameStateEssence {
+		& self.essence
+	}
+
+	#[inline]
+	pub fn num_monikers(&self) -> usize {
+		self.essence.monikers.len()
+	}
+
+	#[inline]
+	pub fn contains_moniker(&self, moniker: Moniker) -> bool {
+		self.index_of_moniker(moniker).is_some()
+	}
+
+	#[inline]
+	fn is_moniker_at(&self, coord: Coord2D) -> bool {
+		self.index_of_moniker_by_coord(coord).is_some()
+	}
+
+	#[inline]
+	pub fn is_wall_at(&self, coord: Coord2D) -> bool {
+		self.essence.wall_override.get(&coord)
+		.map(|x| *x)
+		.unwrap_or_else(|| {
+			self.wall_default[coord.y as usize]
+			.test(coord.x as usize)
+		})
+	}
+
+	pub fn is_something_at(&self, coord: Coord2D) -> bool {
+		self.is_moniker_at(coord)
+		|| self.is_wall_at(coord)
+	}
+
+	fn set_wall_value(&mut self, coord: Coord2D, value: bool) {
+		if value != self.is_wall_at(coord) {
+			self.essence.wall_override.insert(coord, value);
+		}
+	}
+
+	pub fn add_player(&mut self, moniker: Moniker, obj: PlayerObject) -> ValidMove {
+		if self.players.contains_key(&moniker)
+		|| self.is_something_at(obj.coord) {
+			return false
+		}
+		self.players.insert(moniker, obj);
+		true
+	}
+
+	pub fn remove_player(&mut self, moniker: Moniker) -> ValidMove {
+		self.players.remove(&moniker).is_some()
+	}
+
+	pub fn coord_on_boundary(coord: Coord2D) -> bool {
+		coord.x == 0
+		|| coord.y == 0
+		|| coord.x == Self::WIDTH-1
+		|| coord.y == Self::HEIGHT-1
+	}
+
+	pub fn coord_would_exit(coord: Coord2D, dir: Direction) -> bool {
+		match dir {
+			Direction::Up => coord.y == 0,
+			Direction::Down => coord.y >= Self::HEIGHT-1,
+			Direction::Left => coord.x == 0,
+			Direction::Right => coord.x >= Self::WIDTH-1,
+		}
+	}
+
+	pub fn moniker_iter(&self) -> MonikerIter {
+		MonikerIter(self.essence.monikers.iter())
+	}
+	// WAITING FOR IMPL TRAIT
+	pub fn coord_iter(&self) -> CoordIter {
+		CoordIter { next: Coord2D::NULL }
+	}
+}
+
+impl GameState { /// major stuff
+	pub const WIDTH: u16 = 30;
+	pub const HEIGHT: u16 = 22;
+	pub const TOTAL_COORDS: usize =
+		Self::WIDTH as usize * Self::HEIGHT as usize;
 
 	pub fn new_random() -> Self {
 		let essence = GameStateEssence {
 			monikers: vec![], 
 			rand_seed: new_random_seed(),
-			wall_adds: vec![],
-			wall_subs: vec![],
+			wall_override: HashMap::new(),
 		};
 		Self::from_essence(essence)
 	}
 
 	pub fn from_essence(essence: GameStateEssence) -> Self {
 		let mut rng: XorShiftRng = SeedableRng::from_seed(essence.rand_seed);
-		let mut walls = vec![];
+		let mut wall_default = vec![];
 		let mut wall_count = 0;
-		for _y in 0..Self::HEIGHT {
+		for y in 0..Self::HEIGHT {
 			let mut row = BitSet::with_capacity(Self::WIDTH as usize);
 			for x in 0..Self::WIDTH {
-				if rng.gen_weighted_bool(3) {
+				if Self::coord_on_boundary(Coord2D::new(x, y))
+				|| rng.gen_weighted_bool(3) {
 					row.set(x as usize, true);
 					wall_count += 1;
 				}
 			}
-			walls.push(row);
+			wall_default.push(row);
 		}
 		GameState {
 			essence: essence,
-			walls: walls,
-			non_wall_spaces: Self::WIDTH*Self::HEIGHT - wall_count,
+			wall_default: wall_default,
+			non_wall_spaces: Self::TOTAL_COORDS as usize - wall_count,
 		}
 	}
 
-	pub fn get_essence(& self) -> &GameStateEssence {
-		& self.essence
-	}
-
-	pub fn contains_moniker(&self, moniker: Moniker) -> bool {
-		self.index_of_moniker(moniker).is_some()
-	}
-
-	pub fn num_monikers(&self) -> usize {
-		self.essence.monikers.len()
-	}
-
 	pub fn empty_cell_ratio(&self) -> f32 {
-		let population = self.num_monikers();
-		let spaces_left = self.non_wall_spaces - population;
+		let spaces_left = self.non_wall_spaces - self.num_monikers();
 		let total_spaces = Self::WIDTH*Self::HEIGHT;
-		total_spaces as f32 / spaces_left as f32
+		(spaces_left as f32) / (total_spaces as f32)
 	}
 
 	pub fn random_free_spot(&self) -> Option<Coord2D> {
-		let spaces_left = self.non_wall_spaces - population;
+		let spaces_left = self.non_wall_spaces - self.num_monikers();
 		match self.empty_cell_ratio() {
 			x if x > 0.96 => None,
-			x if x > 0.7 => { //linear probe
+			x if x > 0.7 => { //linear select
 				let mut rng = thread_rng();
-				let mut coord = Coord2D::new(
-					rng.gen_range(0, Self::WIDTH),
-					rng.gen_range(0, Self::HEIGHT),
-				);
-				for coord in self.coord_iter
+				let choice_index = rng.gen_range(0, spaces_left);
+				self.coord_iter()
+				.filter(|&coord| !self.is_wall_at(coord))
+				.nth(choice_index)
 			},
 			_ => { // trial and error
 				let mut rng = thread_rng();
@@ -117,120 +200,61 @@ impl GameState {
 				}
 			}
 		}
-		if ratio > 0.95 {
-			return None; // We're basically full up
-		}
-		let population = self.num_monikers();
-		let spaces_left = self.non_wall_spaces - population;
-		if self.essence.monikers.len()/2 >= (Self::WIDTH * Self::HEIGHT) as usize {
-			return None
-			// TODO linear probing or something better. Fine for now
-		}
-		let mut rng = thread_rng();
-		let mut coord;
-		loop {
-			coord = Coord2D::new(
-				rng.gen_range(0, Self::WIDTH),
-				rng.gen_range(0, Self::HEIGHT),
-			);
-			if self.is_wall_at(coord) {
-				continue;
-			}
-			if self.index_of_moniker_by_coord(coord).is_none() {
-				return Some(coord);
-			}
-		}
-	}
-
-	pub fn try_remove_moniker(&mut self, moniker: Moniker) -> ValidMove {
-		if let Some(index) = self.index_of_moniker(moniker) {
-			self.essence.monikers.remove(index);
-			true
-		} else { false }
-	}
-
-	pub fn try_put_moniker(&mut self, moniker: Moniker, coord: Coord2D) -> ValidMove {
-		if self.index_of_moniker_by_coord(coord).is_none() {
-			self.essence.monikers.push((coord, moniker));
-			true
-		} else { false }
-		
 	}
 
 	fn index_of_moniker_by_coord(&self, coord: Coord2D) -> Option<usize> {
 		for (i, &(c, _m)) in self.essence.monikers.iter().enumerate() {
-			if c == coord {
-				return Some(i)
-			}
+			if c == coord { return Some(i) }
 		}
 		None
 	}
 
 	fn index_of_moniker(&self, moniker: Moniker) -> Option<usize> {
 		for (i, &(_c, m)) in self.essence.monikers.iter().enumerate() {
-			if m == moniker {
-				return Some(i)
-			}
+			if m == moniker { return Some(i) }
 		}
 		None
 	}
 
+	fn try_move_wall(&mut self, src: Coord2D, dir: Direction) -> ValidMove {
+		if Self::coord_would_exit(src, dir)
+		|| !self.is_wall_at(src) {
+			return false; // wall doesn't exist or is on boundary
+		}
+		let dest = src.move_with(dir);
+		if self.is_wall_at(dest)
+		|| self.is_moniker_at(dest) {
+			return false; // something preventing move
+		}
+		self.set_wall_value(src, false);
+		self.set_wall_value(dest, true);
+		true
+	}
+
 	pub fn move_moniker_in_dir(&mut self, moniker: Moniker, dir: Direction) -> ValidMove {
-		let current_pos;
-		if let Some(index) = self.index_of_moniker(moniker) {
-			let &mut (c, _p) = &mut self.essence.monikers[index];
-			current_pos = c;
-		} else {
-			return false // no such moniker
-		};
-		if self.can_move_at(current_pos, dir) {
-			let index = self.index_of_moniker(moniker).unwrap();
-			let &mut (ref mut c, _p) = &mut self.essence.monikers[index];
-			c.move_with(dir);
-			true
-		} else {
-			false
-		}
-	} 
-
-	pub fn can_move_at(&self, coord: Coord2D, dir: Direction) -> bool {
-		if !match dir {
-			Direction::Up => coord.y > 0,
-			Direction::Down => coord.y < Self::HEIGHT-1,
-			Direction::Left => coord.x > 0,
-			Direction::Right => coord.x < Self::WIDTH-1,
-		} {
-			return false; // end of boundary
-		}
-		let coord2 = match dir {
-			Direction::Up => Coord2D { x:coord.x, y:coord.y-1 },
-			Direction::Down => Coord2D { x:coord.x, y:coord.y+1 },
-			Direction::Left => Coord2D { x:coord.x-1, y:coord.y },
-			Direction::Right => Coord2D { x:coord.x+1, y:coord.y },
-		};
-		return !self.is_wall_at(coord2)
-		&& self.index_of_moniker_by_coord(coord2).is_none() // no moniker there
-	}
-
-	#[inline]
-	pub fn is_wall_at(&self, coord: Coord2D) -> bool {
-		self.walls[coord.y as usize]
-		.test(coord.x as usize)
-	}
-
-	pub fn moniker_iter(&self) -> MonikerIter {
-		MonikerIter(self.essence.monikers.iter())
-	}
-	// WAITING FOR IMPL TRAIT
-	
-	// pub fn wall_iter(&self) -> WallIter {
-	// 	WallIter {
-	// 		bit_grid: &self.walls,
-	// 		next: Coord2D::new(0, 0),
-	// 	}
-	// }
-	pub fn coord_iter(&self) -> CoordIter {
-		CoordIter { next: Coord2D::NULL }
+		self.index_of_moniker(moniker)
+		.and_then(|index| {
+			let current_pos = self.essence.monikers[index].0;
+			if Self::coord_would_exit(current_pos, dir) {
+				None
+			} else {
+				let dest = current_pos.move_with(dir);
+				if self.is_moniker_at(dest) {
+					None // someone in the way
+				} else if self.is_wall_at(dest) {
+					// wall in the way
+					if self.try_move_wall(dest, dir) {
+						Some(()) // success
+					} else {
+						None
+					}
+				} else {
+					// empty space at `dest`
+					self.essence.monikers[index].0 = dest;
+					Some(())
+				}
+			}
+		}).is_some()
 	}
 }
 
@@ -241,36 +265,10 @@ impl<'a> Iterator for MonikerIter<'a> {
     fn size_hint(&self) -> (usize, Option<usize>) { self.0.size_hint() }
 }
 
-// pub struct WallIter<'a> {
-// 	bit_grid: &'a [BitSet],
-// 	next: Coord2D,
-// }
-// impl<'a> Iterator for WallIter<'a> {
-//     type Item = Coord2D;
-//     fn next(&mut self) -> Option<Self::Item> {
-//     	loop {
-//     		if self.next.x >= GameState::WIDTH {
-//     			self.next.x = 0;
-//     			self.next.y += 1;
-//     			if self.next.y >= GameState::HEIGHT {
-//     				return None;
-//     			}
-//     		}
-//     		let was = self.next;
-//     		self.next = Coord2D::new(was.x+1, was.y);
-//     		if self.bit_grid[was.y as usize].test(was.x as usize) {
-//     			return Some(was);
-//     		}
-//     	}
-//     }
-//     fn size_hint(&self) -> (usize, Option<usize>) {
-//     	(0, None)
-//     }
-// }
-pub struct CoordIter<'a> {
+pub struct CoordIter {
 	next: Coord2D,
 }
-impl<'a> Iterator for CoordIter<'a> {
+impl Iterator for CoordIter {
     type Item = Coord2D;
 fn next(&mut self) -> Option<Self::Item> {
 		if self.next.x >= GameState::WIDTH {
@@ -282,10 +280,10 @@ fn next(&mut self) -> Option<Self::Item> {
 		}
 		let was = self.next;
 		self.next = Coord2D::new(was.x+1, was.y);
-		was
+		Some(was)
     }
     fn size_hint(&self) -> (usize, Option<usize>) {
-    	let x = GameState::WIDTH * GameState::HEIGHT;
+    	let x = GameState::TOTAL_COORDS;
     	(x, Some(x))
     }
 }
@@ -304,12 +302,12 @@ impl Coord2D {
 	}
 
 	// ASSUMES ITS VALID
-	pub fn move_with(&mut self, dir: Direction) {
+	pub fn move_with(self, dir: Direction) -> Coord2D {
 		match dir {
-			Direction::Up => self.y -= 1,
-			Direction::Down => self.y += 1,
-			Direction::Left => self.x -= 1,
-			Direction::Right => self.x += 1,
+			Direction::Up => Coord2D::new(self.x, self.y-1),
+			Direction::Down => Coord2D::new(self.x, self.y+1),
+			Direction::Left => Coord2D::new(self.x-1, self.y),
+			Direction::Right => Coord2D::new(self.x+1, self.y),
 		}
 	}
 }
