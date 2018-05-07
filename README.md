@@ -5,7 +5,7 @@ This is a little "game" I made for testing the RTT and other such things for a g
 ## Setup
 1. Ensure you have the stable branch of [rust](https://www.rust-lang.org/) installed. Use [rustup](https://rustup.rs) to install the latest 'stable' toolchain.
 1. clone this [repo](https://github.com/sirkibsirkib/pinggame) with [git](https://git-scm.com/). Eg: type `git clone https://github.com/sirkibsirkib/pinggame` into your terminal.
-1. Follow everything after (not including) the 'project setup' section of [these instructions](https://github.com/ggez/ggez/blob/master/docs/BuildingForEveryPlatform.md) to setup [SDL2](https://www.libsdl.org/) on your machine. (the underlying `ggez` game engine relies on it).
+1. Follow everything after (not including) the 'project setup' section of [these instructions](https://github.com/ggez/ggez/blob/master/docs/BuildingForEveryPlatform.md) to setup [SDL2](https://www.libsdl.org/) on your machine. (the underlying `ggez` game engine relies on it). Ubuntu had trouble with this, and it was resolved with `apt install libasound2-dev libsdl2-dev pkg-config`.
 1. run `cargo build --release` inside the cloned repo. If its takes a moment, that's a good sign. If all goes well, you'll see something like this:
 ```
 $ cargo build --release
