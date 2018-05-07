@@ -20,7 +20,7 @@ pub struct LCGenerator {
 	seed: u64,
 }
 
-impl LCGenerator {
+impl LCGenerator { // Linear Congruential Generator
 	const A: u64 = 1103515245;
 	const C: u64 = 12345;
 	const M: u64 = 0x100_000_000;
@@ -36,6 +36,10 @@ impl Rng for LCGenerator {
     fn next_u32(&mut self) -> u32 {
         self.seed = (Self::A * self.seed + Self::C) % Self::M;
   		return self.seed as u32;
+    }
+    fn next_u64(&mut self) -> u64 {
+        self.seed = (Self::A * self.seed + Self::C) % Self::M;
+  		return self.seed;
     }
 }
 
