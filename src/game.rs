@@ -7,8 +7,38 @@ use rand::{
 use bitset::BitSet;
 use std::{
 	fmt,
-	collections::HashMap,
+	collections::{
+		HashMap,
+		HashSet,
+	},
 };
+
+
+
+#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
+pub struct LCGenerator {
+	seed: u64,
+}
+
+impl LCGenerator {
+	const A: u64 = 1103515245;
+	const C: u64 = 12345;
+	const M: u64 = 0x100_000_000;
+
+	pub fn new_random_seeded() -> Self {
+		LCGenerator {
+			seed: thread_rng().gen(),
+		}
+	}
+}
+impl Rng for LCGenerator {
+    #[inline]
+    fn next_u32(&mut self) -> u32 {
+        self.seed = (Self::A * self.seed + Self::C) % Self::M;
+  		return self.seed as u32;
+    }
+}
+
 
 
 #[derive(Copy, Clone, Eq, PartialEq, Serialize, Deserialize, Debug, Hash)]
@@ -24,14 +54,19 @@ fn new_random_seed() -> GameStateSeed {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PlayerObject {
-	coord: Coord2D,
-	charge: u16,
+	pub coord: Coord2D,
+	pub charge: u16,
+}
+impl PlayerObject {
+	const POWER_LIMIT: u16 = 3;
 }
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct GameStateEssence { //everything that CANNOT be generated
 	players: HashMap<Moniker, PlayerObject>, 
-	rand_seed: GameStateSeed,
+	wall_default_seed: GameStateSeed,
 	wall_override: HashMap<Coord2D, bool>,
+	power_blobs: HashSet<Coord2D>,
+	sync_rng: LCGenerator,
 }
 pub struct GameState { //all but `essence` can be generated from `essence`
 	essence: GameStateEssence,
@@ -51,6 +86,7 @@ impl GameState { // basic stuff
 	pub const HEIGHT: u16 = 22;
 	pub const TOTAL_COORDS: usize =
 		Self::WIDTH as usize * Self::HEIGHT as usize;
+	pub const NUM_POWER_BLOBS: u8 = 3;
 
 	#[inline]
 	pub fn get_essence(& self) -> &GameStateEssence {
@@ -58,18 +94,41 @@ impl GameState { // basic stuff
 	}
 
 	#[inline]
-	pub fn num_monikers(&self) -> usize {
-		self.essence.monikers.len()
+	pub fn num_players(&self) -> usize {
+		self.essence.players.len()
 	}
 
 	#[inline]
-	pub fn contains_moniker(&self, moniker: Moniker) -> bool {
-		self.index_of_moniker(moniker).is_some()
+	pub fn num_empty_coords(&self) -> usize {
+		self.non_wall_spaces - self.num_players()
 	}
 
 	#[inline]
-	fn is_moniker_at(&self, coord: Coord2D) -> bool {
-		self.index_of_moniker_by_coord(coord).is_some()
+	pub fn contains_player(&self, moniker: Moniker) -> bool {
+		self.essence.players.contains_key(&moniker)
+	}
+
+	fn get_player_at(&self, coord: Coord2D) -> Option<&PlayerObject> {
+		for player in self.essence.players.values() {
+			if player.coord == coord {
+				return Some(player);
+			}
+		}
+		None
+	}
+
+	// fn get_mut_player_at(&mut self, coord: Coord2D) -> Option<&mut PlayerObject> {
+	// 	for player in self.essence.players.values_mut() {
+	// 		if player.coord == coord {
+	// 			return Some(player);
+	// 		}
+	// 	}
+	// 	None
+	// }
+
+	#[inline]
+	fn is_player_at(&self, coord: Coord2D) -> bool {
+		self.get_player_at(coord).is_some()
 	}
 
 	#[inline]
@@ -82,9 +141,15 @@ impl GameState { // basic stuff
 		})
 	}
 
+	#[inline]
+	pub fn is_blob_at(&self, coord: Coord2D) -> bool {
+		self.essence.power_blobs.contains(&coord)
+	}
+
 	pub fn is_something_at(&self, coord: Coord2D) -> bool {
-		self.is_moniker_at(coord)
+		self.is_player_at(coord)
 		|| self.is_wall_at(coord)
+		|| self.is_blob_at(coord)
 	}
 
 	fn set_wall_value(&mut self, coord: Coord2D, value: bool) {
@@ -93,17 +158,21 @@ impl GameState { // basic stuff
 		}
 	}
 
-	pub fn add_player(&mut self, moniker: Moniker, obj: PlayerObject) -> ValidMove {
-		if self.players.contains_key(&moniker)
-		|| self.is_something_at(obj.coord) {
+	pub fn try_add_player(&mut self, moniker: Moniker, coord: Coord2D) -> ValidMove {
+		if self.essence.players.contains_key(&moniker)
+		|| self.is_something_at(coord) {
 			return false
 		}
-		self.players.insert(moniker, obj);
+		let obj = PlayerObject {
+			coord: coord,
+			charge: 3,
+		};
+		self.essence.players.insert(moniker, obj);
 		true
 	}
 
-	pub fn remove_player(&mut self, moniker: Moniker) -> ValidMove {
-		self.players.remove(&moniker).is_some()
+	pub fn try_remove_player(&mut self, moniker: Moniker) -> ValidMove {
+		self.essence.players.remove(&moniker).is_some()
 	}
 
 	pub fn coord_on_boundary(coord: Coord2D) -> bool {
@@ -116,38 +185,52 @@ impl GameState { // basic stuff
 	pub fn coord_would_exit(coord: Coord2D, dir: Direction) -> bool {
 		match dir {
 			Direction::Up => coord.y == 0,
-			Direction::Down => coord.y >= Self::HEIGHT-1,
+			Direction::Down => coord.y == Self::HEIGHT-1,
 			Direction::Left => coord.x == 0,
-			Direction::Right => coord.x >= Self::WIDTH-1,
+			Direction::Right => coord.x == Self::WIDTH-1,
 		}
 	}
 
-	pub fn moniker_iter(&self) -> MonikerIter {
-		MonikerIter(self.essence.monikers.iter())
+	pub fn player_iter(&self) -> PlayerIter {
+		PlayerIter(self.essence.players.iter())
+	}
+
+	pub fn blob_iter(&self) -> BlobIter {
+		BlobIter(self.essence.power_blobs.iter())
 	}
 	// WAITING FOR IMPL TRAIT
 	pub fn coord_iter(&self) -> CoordIter {
 		CoordIter { next: Coord2D::NULL }
 	}
+
+	pub fn empty_cell_ratio(&self) -> f32 {
+		(self.num_empty_coords() as f32)
+		/ (Self::TOTAL_COORDS as f32)
+	}
 }
 
 impl GameState { /// major stuff
-	pub const WIDTH: u16 = 30;
-	pub const HEIGHT: u16 = 22;
-	pub const TOTAL_COORDS: usize =
-		Self::WIDTH as usize * Self::HEIGHT as usize;
 
 	pub fn new_random() -> Self {
 		let essence = GameStateEssence {
-			monikers: vec![], 
-			rand_seed: new_random_seed(),
+			players: HashMap::new(), 
+			wall_default_seed: new_random_seed(),
 			wall_override: HashMap::new(),
+			power_blobs: HashSet::new(),
+			sync_rng: LCGenerator::new_random_seeded(),
 		};
-		Self::from_essence(essence)
+		let mut x = Self::from_essence(essence);
+		for _ in 0..Self::NUM_POWER_BLOBS {
+			let coord = x.random_free_spot()
+				.expect("nowhere to put blob");
+			x.essence.power_blobs.insert(coord);
+		}
+		x
 	}
 
 	pub fn from_essence(essence: GameStateEssence) -> Self {
-		let mut rng: XorShiftRng = SeedableRng::from_seed(essence.rand_seed);
+		// build default wall object. 
+		let mut rng: XorShiftRng = SeedableRng::from_seed(essence.wall_default_seed);
 		let mut wall_default = vec![];
 		let mut wall_count = 0;
 		for y in 0..Self::HEIGHT {
@@ -168,21 +251,14 @@ impl GameState { /// major stuff
 		}
 	}
 
-	pub fn empty_cell_ratio(&self) -> f32 {
-		let spaces_left = self.non_wall_spaces - self.num_monikers();
-		let total_spaces = Self::WIDTH*Self::HEIGHT;
-		(spaces_left as f32) / (total_spaces as f32)
-	}
-
 	pub fn random_free_spot(&self) -> Option<Coord2D> {
-		let spaces_left = self.non_wall_spaces - self.num_monikers();
 		match self.empty_cell_ratio() {
-			x if x > 0.96 => None,
-			x if x > 0.7 => { //linear select
+			x if x > 0.96 => None, // I give up
+			x if x > 0.6 => { //linear select
 				let mut rng = thread_rng();
-				let choice_index = rng.gen_range(0, spaces_left);
+				let choice_index = rng.gen_range(0, self.num_empty_coords());
 				self.coord_iter()
-				.filter(|&coord| !self.is_wall_at(coord))
+				.filter(|&coord| !self.is_something_at(coord))
 				.nth(choice_index)
 			},
 			_ => { // trial and error
@@ -193,8 +269,7 @@ impl GameState { /// major stuff
 						rng.gen_range(0, Self::WIDTH),
 						rng.gen_range(0, Self::HEIGHT),
 					);
-					if self.is_wall_at(coord) { continue; }
-					if self.index_of_moniker_by_coord(coord).is_none() {
+					if !self.is_something_at(coord) {
 						return Some(coord);
 					}
 				}
@@ -202,18 +277,34 @@ impl GameState { /// major stuff
 		}
 	}
 
-	fn index_of_moniker_by_coord(&self, coord: Coord2D) -> Option<usize> {
-		for (i, &(c, _m)) in self.essence.monikers.iter().enumerate() {
-			if c == coord { return Some(i) }
+	pub fn sync_random_free_spot(&mut self) -> Option<Coord2D> {
+		match self.empty_cell_ratio() {
+			x if x > 0.96 => None, // I give up
+			x if x > 0.6 => { //linear select
+				let ne = self.num_empty_coords();
+				let choice_index = {
+					let mut rng = &mut self.essence.sync_rng;
+					rng.gen_range(0, ne)
+				};
+				self.coord_iter()
+				.filter(|&coord| !self.is_something_at(coord))
+				.nth(choice_index)
+			},
+			_ => { // trial and error
+				loop {
+					let coord = {
+						let mut rng = &mut self.essence.sync_rng;
+						Coord2D::new(
+							rng.gen_range(0, Self::WIDTH),
+							rng.gen_range(0, Self::HEIGHT),
+						)
+					};
+					if !self.is_something_at(coord) {
+						return Some(coord);
+					}
+				}
+			}
 		}
-		None
-	}
-
-	fn index_of_moniker(&self, moniker: Moniker) -> Option<usize> {
-		for (i, &(_c, m)) in self.essence.monikers.iter().enumerate() {
-			if m == moniker { return Some(i) }
-		}
-		None
 	}
 
 	fn try_move_wall(&mut self, src: Coord2D, dir: Direction) -> ValidMove {
@@ -222,8 +313,7 @@ impl GameState { /// major stuff
 			return false; // wall doesn't exist or is on boundary
 		}
 		let dest = src.move_with(dir);
-		if self.is_wall_at(dest)
-		|| self.is_moniker_at(dest) {
+		if self.is_something_at(dest) {
 			return false; // something preventing move
 		}
 		self.set_wall_value(src, false);
@@ -232,35 +322,55 @@ impl GameState { /// major stuff
 	}
 
 	pub fn move_moniker_in_dir(&mut self, moniker: Moniker, dir: Direction) -> ValidMove {
-		self.index_of_moniker(moniker)
-		.and_then(|index| {
-			let current_pos = self.essence.monikers[index].0;
-			if Self::coord_would_exit(current_pos, dir) {
-				None
+		if !self.contains_player(moniker) { return false; } // no such player
+		let src = self.essence.players.get_mut(&moniker).unwrap().coord;
+
+		if Self::coord_would_exit(src, dir) { return false; } // on boundary
+		let dest = src.move_with(dir);
+
+		if self.is_player_at(dest) { return false; } //obstructed
+		if self.is_wall_at(dest) {
+			if self.essence.players.get(&moniker).unwrap().charge > 0
+			&& self.try_move_wall(dest, dir) {
+				//successfully moved wall
+				let player = self.essence.players.get_mut(&moniker).unwrap();
+				player.coord = dest;
+				player.charge -= 1;
+				true
 			} else {
-				let dest = current_pos.move_with(dir);
-				if self.is_moniker_at(dest) {
-					None // someone in the way
-				} else if self.is_wall_at(dest) {
-					// wall in the way
-					if self.try_move_wall(dest, dir) {
-						Some(()) // success
-					} else {
-						None
-					}
-				} else {
-					// empty space at `dest`
-					self.essence.monikers[index].0 = dest;
-					Some(())
+				//failed to move wall 
+				false
+			}
+		} else {
+			// spot was free
+			self.essence.players.get_mut(&moniker)
+			.unwrap().coord = dest;
+			if self.is_blob_at(dest) {
+				self.essence.power_blobs.remove(&dest);
+				let new_blob_at = self.sync_random_free_spot()
+					.expect("nowhere to put blob");
+				self.essence.power_blobs.insert(new_blob_at);
+
+				let player = self.essence.players.get_mut(&moniker).unwrap();
+				if player.charge < PlayerObject::POWER_LIMIT {
+					player.charge += 1;
 				}
 			}
-		}).is_some()
+			true
+		}
 	}
 }
 
-pub struct MonikerIter<'a>(::std::slice::Iter<'a, (Coord2D, Moniker)>);
-impl<'a> Iterator for MonikerIter<'a> {
-    type Item = &'a (Coord2D, Moniker);
+pub struct PlayerIter<'a>(::std::collections::hash_map::Iter<'a, Moniker, PlayerObject>);
+impl<'a> Iterator for PlayerIter<'a> {
+    type Item = (&'a Moniker, &'a PlayerObject);
+    fn next(&mut self) -> Option<Self::Item> { self.0.next() }
+    fn size_hint(&self) -> (usize, Option<usize>) { self.0.size_hint() }
+}
+
+pub struct BlobIter<'a>(::std::collections::hash_set::Iter<'a, Coord2D>);
+impl<'a> Iterator for BlobIter<'a> {
+    type Item = &'a Coord2D;
     fn next(&mut self) -> Option<Self::Item> { self.0.next() }
     fn size_hint(&self) -> (usize, Option<usize>) { self.0.size_hint() }
 }

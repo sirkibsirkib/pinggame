@@ -26,6 +26,7 @@ use ggez::{
     conf,
     graphics::{
         self,
+        Color,
         DrawMode,
         Point2,
         Mesh,
@@ -40,6 +41,13 @@ use ggez::{
 type TextCache = HashMap<Moniker, graphics::Text>;
 
 const CLIENT_TOKEN: Token = Token(0);
+
+const CHARGE_COLORS: [Color; 4] = [
+	Color { r:1.0, g:1.0, b:1.0, a:1. },
+	Color { r:1.0, g:0.8, b:0.8, a:1. },
+	Color { r:0.6, g:1.0, b:0.6, a:1. },
+	Color { r:1.0, g:0.0, b:1.0, a:1. },
+];
 
 pub fn client_enter(addr: &SocketAddr, my_moniker: Moniker) {
 	println!("Client starting, for server at addr {:?}!", addr);
@@ -77,7 +85,7 @@ fn client_go(mut mm: Middleman, my_moniker: Moniker) {
     let ctx = &mut Context::load_from_conf("super_simple", "ggez", c).unwrap();
 
     let mut text_cache = HashMap::new();
-    for &(_, moniker) in game_state.moniker_iter() {
+    for (&moniker, _obj) in game_state.player_iter() {
     	insert_into_cache(ctx, &mut text_cache, moniker);
     }
     insert_into_cache(ctx, &mut text_cache, my_moniker);
@@ -162,11 +170,11 @@ impl event::EventHandler for ClientState {
                 Welcome(_) => panic!("Not expecting a welcome"),
                 AddPlayer(moniker, coord) => {
     				insert_into_cache(ctx, tx_cache, moniker);
-                    gs.try_put_moniker(moniker, coord);
+                    gs.try_add_player(moniker, coord);
                 },
                 RemovePlayer(moniker) => {
                 	tx_cache.remove(&moniker);
-                    gs.try_remove_moniker(moniker);
+                    gs.try_remove_player(moniker);
                 },
                 UpdMove(moniker, dir) => {
                     gs.move_moniker_in_dir(moniker, dir);
@@ -213,13 +221,13 @@ impl event::EventHandler for ClientState {
     		return Ok(());
     	}
         graphics::clear(ctx);
-    	for &(coord, moniker) in self.game_state.moniker_iter() {
+    	for (&moniker, player_obj) in self.game_state.player_iter() {
     		let moniker_text = self.text_cache.get(&moniker).unwrap();
-    		let screen_point = self.translate(coord);
+    		let screen_point = self.translate(player_obj.coord);
     		let param = graphics::DrawParam {
     			dest: screen_point, .. Default::default()
     		};
-        	graphics::set_color(ctx, (255, 255, 255).into())?;
+        	graphics::set_color(ctx, CHARGE_COLORS[player_obj.charge as usize])?;
     		graphics::draw_ex(ctx, &self.mesh, param)?;
         	graphics::set_color(ctx, (0, 0, 0).into())?;
     		graphics::draw_ex(ctx, moniker_text, param)?;
@@ -227,6 +235,14 @@ impl event::EventHandler for ClientState {
     	graphics::set_color(ctx, (40, 0, 0).into())?;
     	for coord in self.game_state.coord_iter()
     	.filter(|&coord| self.game_state.is_wall_at(coord)) {
+    		let screen_point = self.translate(coord);
+    		let param = graphics::DrawParam {
+    			dest: screen_point, .. Default::default()
+    		};
+    		graphics::draw_ex(ctx, &self.mesh, param)?;
+    	}
+    	graphics::set_color(ctx, (255, 255, 0).into())?;
+    	for &coord in self.game_state.blob_iter() {
     		let screen_point = self.translate(coord);
     		let param = graphics::DrawParam {
     			dest: screen_point, .. Default::default()

@@ -162,7 +162,7 @@ fn init_bots(game_state: &mut GameState) -> Vec<Bot> {
 	.iter().map(|&c| Moniker(c))
 	{
 		let coord = game_state.random_free_spot().expect("No coord to put bot");
-		if game_state.try_put_moniker(bot_moniker, coord) {
+		if game_state.try_add_player(bot_moniker, coord) {
 			bots.push(Bot { moniker: bot_moniker, last_move_at: Instant::now() });
 		} else {
 			panic!("Failed to place bot {:?}", bot_moniker);
@@ -205,18 +205,18 @@ fn do_server_control(server_control: &mut Vec<ServerCtrlMsg>, newcomers: &mut Ne
 				if let Some(mut obj) = clients.remove(&tok) {
 					let _ = poll.deregister(& obj.middleman);
 					let _ = obj.middleman.send(& msg);
-					if game_state.try_remove_moniker(obj.moniker) {
+					if game_state.try_remove_player(obj.moniker) {
 						outgoing_updates.push(Clientward::RemovePlayer(obj.moniker));
 					}
 				}
 			},
 			ServerCtrlMsg::UpgradeClient(tok, moniker) => {
 				let mut mm = newcomers.remove(&tok).expect("remove fail");
-				if game_state.contains_moniker(moniker) {
+				if game_state.contains_player(moniker) {
 					let _ = mm.send(& Clientward::ErrorTakenMoniker);
 				} else {
 					let coord = game_state.random_free_spot().expect("GAME TOO FULL");
-					if game_state.try_put_moniker(moniker, coord) {
+					if game_state.try_add_player(moniker, coord) {
 						if mm.send(& Clientward::Welcome(game_state.get_essence().clone())).is_ok() {
 							poll.reregister(&mm, tok,
 						    			Ready::readable() | Ready::writable(),
