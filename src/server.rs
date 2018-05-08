@@ -65,6 +65,7 @@ pub fn server_enter(addr: &SocketAddr) {
     loop {
     	let poll_sleep = if clients.is_empty() { None } else { Some(SERVER_SLEEP_TIME) };
     	poll.poll(&mut events, poll_sleep).unwrap();
+    	println!("poll woke up");
     	for event in events.iter() {
     		match event.token() {
     			LISTENER_TOKEN => {
@@ -76,8 +77,8 @@ pub fn server_enter(addr: &SocketAddr) {
 				    		let tok = next_free_token(&clients, &newcomers);
 							println!("Newcomer client with {:?}", tok);
 				    		poll.register(&mm, tok,
-						    			Ready::writable() | Ready::readable(),
-						    			PollOpt::oneshot()).unwrap();
+						    			Ready::readable() | Ready::writable(),
+						    			PollOpt::edge()).unwrap();
 				    		newcomers.insert(tok, mm);
 						},
 						Err(e) => {
@@ -218,6 +219,7 @@ fn do_server_control(server_control: &mut Vec<ServerCtrlMsg>, newcomers: &mut Ne
 					let coord = game_state.random_free_spot().expect("GAME TOO FULL");
 					if game_state.try_add_player(moniker, coord) {
 						if mm.send(& Clientward::Welcome(game_state.get_essence().clone())).is_ok() {
+							poll.deregister(&mm).expect("deregister fail");
 							poll.reregister(&mm, tok,
 						    			Ready::readable() | Ready::writable(),
 						    			PollOpt::edge()).expect("reregister fail");
@@ -276,7 +278,7 @@ fn handle_newcomer_incoming(newcomers: &mut Newcomers, tok: Token, server_contro
 	use self::ServerCtrlMsg::*;
 	let mut done = false; // drop all but first message
 	let mm: &mut Middleman = newcomers.get_mut(&tok).expect("newcomer incoming");
-	mm.recv_all_map( |_me, msg| {
+	if mm.recv_all_map( |_me, msg| {
 		println!("got from newcomer {:?} {:?}", tok, &msg);
 		if done { return }
 		if let Serverward::Hello(moniker) = msg {
@@ -285,7 +287,9 @@ fn handle_newcomer_incoming(newcomers: &mut Newcomers, tok: Token, server_contro
 			server_control.push(DropNewcomerWithErr(tok, Clientward::ErrorExpectedHello));
 		}
 		done = true;
-	});
+	}).1.is_err() {
+		server_control.push(DropNewcomerWithErr(tok, Clientward::ErrorSocketDead));
+	}
 }
 
 #[inline]
