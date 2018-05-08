@@ -65,7 +65,7 @@ pub fn server_enter(addr: &SocketAddr) {
     loop {
     	let poll_sleep = if clients.is_empty() { None } else { Some(SERVER_SLEEP_TIME) };
     	poll.poll(&mut events, poll_sleep).unwrap();
-    	println!("poll woke up");
+    	// ::std::thread::sleep(Duration::from_millis(200));
     	for event in events.iter() {
     		match event.token() {
     			LISTENER_TOKEN => {
@@ -77,7 +77,7 @@ pub fn server_enter(addr: &SocketAddr) {
 				    		let tok = next_free_token(&clients, &newcomers);
 							println!("Newcomer client with {:?}", tok);
 				    		poll.register(&mm, tok,
-						    			Ready::readable() | Ready::writable(),
+						    			Ready::readable(),
 						    			PollOpt::edge()).unwrap();
 				    		newcomers.insert(tok, mm);
 						},
