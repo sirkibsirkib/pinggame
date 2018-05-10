@@ -65,7 +65,6 @@ pub fn server_enter(addr: &SocketAddr) {
     loop {
     	let poll_sleep = if clients.is_empty() { None } else { Some(SERVER_SLEEP_TIME) };
     	poll.poll(&mut events, poll_sleep).unwrap();
-    	// ::std::thread::sleep(Duration::from_millis(200));
     	for event in events.iter() {
     		match event.token() {
     			LISTENER_TOKEN => {
